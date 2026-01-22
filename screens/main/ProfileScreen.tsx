@@ -10,6 +10,7 @@ import {
     Platform,
     StatusBar as RNStatusBar,
     Alert,
+    RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -29,9 +30,10 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const ProfileScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
-    const { data } = useUserProfile();
+    const { data, refetch: refetchUserProfile } = useUserProfile();
     const user = data?.data?.user;
     const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const logoutMutation = useLogout();
     const { checkAuth } = useAuth();
 
@@ -50,6 +52,25 @@ const ProfileScreen = () => {
 
     const userName = user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() : 'User';
     const isVerified = user?.email_verified_at ? 'Verified' : 'Unverified';
+
+    // Handle pull to refresh
+    const onRefresh = async () => {
+        setIsRefreshing(true);
+        try {
+            // Refetch user profile data
+            await refetchUserProfile();
+            
+            // Reload profile image
+            const storedImage = await getProfileImage();
+            if (storedImage) {
+                setProfileImageUri(storedImage);
+            }
+        } catch (error) {
+            console.error('Error refreshing data:', error);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
 
     const handleLogout = () => {
         Alert.alert(
@@ -131,7 +152,14 @@ const ProfileScreen = () => {
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
-               
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isRefreshing}
+                        onRefresh={onRefresh}
+                        tintColor="#42AC36"
+                        colors={['#42AC36']}
+                    />
+                }
             >
                 {/* General Settings Section */}
                 <View style={styles.section}>

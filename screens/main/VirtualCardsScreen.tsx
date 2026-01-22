@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -41,6 +42,7 @@ const VirtualCardsScreen = () => {
     data: cardsData,
     isLoading: isLoadingCards,
     error: cardsError,
+    refetch: refetchCards,
   } = useVirtualCards();
 
   const cards = cardsData?.data || [];
@@ -51,6 +53,7 @@ const VirtualCardsScreen = () => {
   const [cardLimitVisible, setCardLimitVisible] = useState(false);
   const [freezeCardVisible, setFreezeCardVisible] = useState(false);
   const [freezeToggle, setFreezeToggle] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const flatListRef = useRef<FlatList>(null);
 
@@ -79,24 +82,79 @@ const VirtualCardsScreen = () => {
   const {
     data: cardDetailsData,
     isLoading: isLoadingDetails,
+    refetch: refetchCardDetails,
   } = useVirtualCardDetails(cardId ?? 0);
 
   const {
     data: billingData,
     isLoading: isLoadingBilling,
+    refetch: refetchBilling,
   } = useVirtualCardBillingAddress(cardId ?? 0);
 
   const {
     data: limitsData,
     isLoading: isLoadingLimits,
+    refetch: refetchLimits,
   } = useVirtualCardLimits(cardId ?? 0);
 
   const {
     data: transactionsData,
     isLoading: isLoadingTx,
+    refetch: refetchTransactions,
   } = useVirtualCardTransactions(cardId ?? 0);
 
-  const recentTx = transactionsData?.data?.[0] || null;
+  // Get recent transaction - handle different possible data structures
+  const recentTx = useMemo(() => {
+    if (!transactionsData?.data) {
+      console.log('🔵 VirtualCardsScreen - No transactionsData.data');
+      return null;
+    }
+    
+    // Handle array directly
+    if (Array.isArray(transactionsData.data)) {
+      console.log('🔵 VirtualCardsScreen - transactionsData.data is array, length:', transactionsData.data.length);
+      return transactionsData.data[0] || null;
+    }
+    
+    // Handle object with transactions array
+    if (transactionsData.data.transactions && Array.isArray(transactionsData.data.transactions)) {
+      console.log('🔵 VirtualCardsScreen - Found transactions array, length:', transactionsData.data.transactions.length);
+      return transactionsData.data.transactions[0] || null;
+    }
+    
+    // Handle object with data array
+    if (transactionsData.data.data && Array.isArray(transactionsData.data.data)) {
+      console.log('🔵 VirtualCardsScreen - Found data.data array, length:', transactionsData.data.data.length);
+      return transactionsData.data.data[0] || null;
+    }
+    
+    console.log('🔵 VirtualCardsScreen - Unknown data structure:', {
+      hasData: !!transactionsData.data,
+      dataType: typeof transactionsData.data,
+      isArray: Array.isArray(transactionsData.data),
+      keys: transactionsData.data ? Object.keys(transactionsData.data) : [],
+    });
+    
+    return null;
+  }, [transactionsData]);
+
+  // Format date for display
+  const formatDate = (dateString?: string): string => {
+    if (!dateString) return '';
+    try {
+      const date = new Date(dateString);
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = date.toLocaleString('en-US', { month: 'short' });
+      const year = date.getFullYear().toString().slice(-2);
+      const hours = date.getHours();
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const displayHours = hours % 12 || 12;
+      return `${day} ${month}, ${year} - ${displayHours}:${minutes} ${ampm}`;
+    } catch {
+      return dateString;
+    }
+  };
 
   const freezeMutation = useFreezeVirtualCard();
   const unfreezeMutation = useUnfreezeVirtualCard();
@@ -154,6 +212,31 @@ const VirtualCardsScreen = () => {
     });
   };
 
+  // Handle pull to refresh
+  const onRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      // Refetch all relevant queries
+      const promises = [refetchCards()];
+      
+      // Only refetch card-specific data if a card is selected
+      if (cardId) {
+        promises.push(
+          refetchCardDetails(),
+          refetchBilling(),
+          refetchLimits(),
+          refetchTransactions()
+        );
+      }
+      
+      await Promise.all(promises);
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   if (isLoadingCards) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
@@ -179,6 +262,14 @@ const VirtualCardsScreen = () => {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            tintColor="#42AC36"
+            colors={['#42AC36']}
+          />
+        }
       >
         {/* Top content background (card + actions) */}
         <ImageBackground
@@ -443,44 +534,75 @@ const VirtualCardsScreen = () => {
           </View>
 
           {/* Recent Transactions */}
-          <View style={styles.recentHeaderRow}>
-            <ThemedText style={styles.recentTitle}>Recent Transactions</ThemedText>
-            <ThemedText style={styles.recentViewAll}>View All</ThemedText>
-          </View>
+          {cardId && (
+            <View style={styles.recentTransactionsSection}>
+              <View style={styles.recentHeaderRow}>
+                <ThemedText style={styles.recentTitle}>Recent Transactions</ThemedText>
+                <TouchableOpacity
+                  onPress={handleNavigateTransactions}
+                  activeOpacity={0.8}
+                >
+                  <ThemedText style={styles.recentViewAll}>View All</ThemedText>
+                </TouchableOpacity>
+              </View>
 
-          <View style={styles.transactionCard}>
-            <View style={styles.transactionLeft}>
-              <View style={styles.transactionIconCircle}>
-                <Image
-                  source={require('../../assets/sent (1).png')}
-                  style={styles.transactionIconImage}
-                  resizeMode="contain"
-                />
-              </View>
-              <View>
-                <ThemedText style={styles.transactionTitle}>
-                  {recentTx?.description || 'Funds Deposit'}
-                </ThemedText>
-                <ThemedText style={styles.transactionStatus}>
-                  {recentTx
-                    ? recentTx.status === 'completed'
-                      ? 'Successful'
-                      : recentTx.status
-                    : '—'}
-                </ThemedText>
-              </View>
+              {isLoadingTx ? (
+                <View style={[styles.transactionCard, { justifyContent: 'center', paddingVertical: 20 }]}>
+                  <ActivityIndicator size="small" color="#42AC36" />
+                </View>
+              ) : recentTx ? (
+                <TouchableOpacity
+                  style={styles.transactionCard}
+                  onPress={() => {
+                    navigation.navigate('TransactionHistory', {
+                      type: 'virtual_card',
+                      transactionData: {
+                        ...recentTx,
+                        transaction_id: recentTx.transaction_id || recentTx.id,
+                        wallet_type: 'virtual_card',
+                      },
+                      cardId: cardId,
+                    });
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.transactionLeft}>
+                    <View style={styles.transactionIconCircle}>
+                      <Image
+                        source={require('../../assets/sent (1).png')}
+                        style={styles.transactionIconImage}
+                        resizeMode="contain"
+                      />
+                    </View>
+                    <View>
+                      <ThemedText style={styles.transactionTitle}>
+                        {recentTx.description || recentTx.type || 'Transaction'}
+                      </ThemedText>
+                      <ThemedText style={styles.transactionStatus}>
+                        {recentTx.status === 'completed'
+                          ? 'Successful'
+                          : recentTx.status || 'Pending'}
+                      </ThemedText>
+                    </View>
+                  </View>
+                  <View style={styles.transactionRight}>
+                    <ThemedText style={styles.transactionAmount}>
+                      {recentTx.currency || 'USD'} {Number(recentTx.amount || 0).toLocaleString()}
+                    </ThemedText>
+                    <ThemedText style={styles.transactionDate}>
+                      {formatDate(recentTx.created_at)}
+                    </ThemedText>
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={[styles.transactionCard, { justifyContent: 'center', paddingVertical: 20 }]}>
+                  <ThemedText style={[styles.transactionTitle, { textAlign: 'center', opacity: 0.5 }]}>
+                    No transactions yet
+                  </ThemedText>
+                </View>
+              )}
             </View>
-            <View style={styles.transactionRight}>
-              <ThemedText style={styles.transactionAmount}>
-                {recentTx
-                  ? `${recentTx.currency} ${Number(recentTx.amount || 0).toLocaleString()}`
-                  : '--'}
-              </ThemedText>
-              <ThemedText style={styles.transactionDate}>
-                {recentTx?.created_at || ''}
-              </ThemedText>
-            </View>
-          </View>
+          )}
         </View>
       </ScrollView>
 
@@ -862,7 +984,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   scrollContent: {
-    paddingBottom: 24,
+    paddingBottom: 150,
   },
   topBackground: {
     width,
@@ -1066,7 +1188,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
     paddingTop: 24,
-    paddingBottom: 32,
+    paddingBottom: 50,
   },
   gridRow: {
     flexDirection: 'row',
@@ -1144,6 +1266,9 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 12,
   },
+  recentTransactionsSection: {
+    marginBottom: 20,
+  },
   recentTitle: {
     fontSize: 14,
     fontWeight: '600',
@@ -1181,7 +1306,7 @@ const styles = StyleSheet.create({
     tintColor: '#1B800F',
   },
   transactionTitle: {
-    fontSize: 14,
+    fontSize: 10,
     fontWeight: '500',
     color: '#111827',
   },
@@ -1194,7 +1319,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   transactionAmount: {
-    fontSize: 14,
+    fontSize: 11,
     fontWeight: '600',
     color: '#16A34A',
   },

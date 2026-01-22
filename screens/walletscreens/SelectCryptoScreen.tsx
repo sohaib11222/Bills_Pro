@@ -178,32 +178,6 @@ const SelectCryptoScreen = () => {
         );
     }
 
-    // Show empty state
-    if (filteredAssets.length === 0 && !isLoading) {
-        return (
-            <View style={styles.container}>
-                <StatusBar style="dark" />
-                <View style={styles.header}>
-                    <TouchableOpacity
-                        style={styles.backButton}
-                        onPress={() => navigation.goBack()}
-                        activeOpacity={0.8}
-                    >
-                        <Ionicons name="chevron-back" size={24} color="#000000" />
-                    </TouchableOpacity>
-                    <ThemedText style={styles.headerTitle}>Select Crypto</ThemedText>
-                    <View style={styles.placeholder} />
-                </View>
-                <View style={styles.emptyContainer}>
-                    <Ionicons name="wallet-outline" size={48} color="#9CA3AF" />
-                    <ThemedText style={styles.emptyText}>
-                        {searchQuery ? 'No crypto found' : 'No crypto accounts available'}
-                    </ThemedText>
-                </View>
-            </View>
-        );
-    }
-
     return (
         <View style={styles.container}>
             <StatusBar style="dark" />
@@ -230,43 +204,60 @@ const SelectCryptoScreen = () => {
                     placeholderTextColor="#9CA3AF"
                     value={searchQuery}
                     onChangeText={setSearchQuery}
+                    autoFocus={false}
+                    returnKeyType="search"
+                    blurOnSubmit={false}
                 />
             </View>
 
-            {/* Crypto Grid */}
-            <ScrollView
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.scrollContent}
-            >
-                <View style={styles.cryptoGrid}>
-                    {filteredAssets.map((asset) => (
-                        <TouchableOpacity
-                            key={asset.id}
-                            style={styles.cryptoCard}
-                            activeOpacity={0.8}
-                            onPress={() => handleCryptoSelect(asset)}
-                        >
-                            <View style={[styles.cryptoIcon, { backgroundColor: asset.iconBackground }]}>
-                                <Image
-                                    source={asset.icon}
-                                    style={styles.cryptoIconImage}
-                                    resizeMode="contain"
-                                />
-                            </View>
-                            <View style={{flexDirection: 'row', justifyContent: 'space-between'}}>
-                            <View style={styles.cryptoInfo}>
-                                <ThemedText style={styles.cryptoSymbol}>{asset.symbol}</ThemedText>
-                                <ThemedText style={styles.cryptoName}>{asset.name}</ThemedText>
-                            </View>
-                            <View style={styles.cryptoAmounts}>
-                                <ThemedText style={styles.cryptoAmount}>{asset.amount}</ThemedText>
-                                <ThemedText style={styles.cryptoUsdValue}>{asset.usdValue}</ThemedText>
-                            </View>
-                            </View>
-                        </TouchableOpacity>
-                    ))}
+            {/* Crypto Grid or Empty State */}
+            {filteredAssets.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                    <Ionicons name="wallet-outline" size={48} color="#9CA3AF" />
+                    <ThemedText style={styles.emptyText}>
+                        {searchQuery ? 'No crypto found' : 'No crypto accounts available'}
+                    </ThemedText>
                 </View>
-            </ScrollView>
+            ) : (
+                <ScrollView
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.scrollContent}
+                    keyboardShouldPersistTaps="handled"
+                >
+                    <View style={styles.cryptoGrid}>
+                        {filteredAssets.map((asset) => (
+                            <TouchableOpacity
+                                key={asset.id}
+                                style={styles.cryptoCard}
+                                activeOpacity={0.8}
+                                onPress={() => handleCryptoSelect(asset)}
+                            >
+                                <View style={[styles.cryptoIcon, { backgroundColor: asset.iconBackground }]}>
+                                    <Image
+                                        source={asset.icon}
+                                        style={styles.cryptoIconImage}
+                                        resizeMode="contain"
+                                    />
+                                </View>
+                                <View style={styles.cryptoBottomRow}>
+                                    <View style={styles.cryptoInfo}>
+                                        <ThemedText style={styles.cryptoSymbol}>{asset.symbol}</ThemedText>
+                                        <ThemedText style={styles.cryptoName}>{asset.name}</ThemedText>
+                                    </View>
+                                    <View style={styles.cryptoAmounts}>
+                                        <ThemedText style={styles.cryptoAmount} numberOfLines={1} ellipsizeMode="tail">
+                                            {asset.amount}
+                                        </ThemedText>
+                                        <ThemedText style={styles.cryptoUsdValue} numberOfLines={1}>
+                                            {asset.usdValue}
+                                        </ThemedText>
+                                    </View>
+                                </View>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </ScrollView>
+            )}
         </View>
     );
 };
@@ -333,29 +324,35 @@ const styles = StyleSheet.create({
         width: (width - 40 - 12) / 2,
         backgroundColor: '#F3F4F6',
         borderRadius: 15,
-        padding: 16,
-        gap: 12,
+        padding: 12,
+        gap: 8,
     },
     cryptoIcon: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
         justifyContent: 'center',
         alignItems: 'center',
-        marginBottom: 8,
+        marginBottom: 6,
     },
     cryptoIconImage: {
-        width: 30,
-        height: 30,
+        width: 24,
+        height: 24,
+    },
+    cryptoBottomRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
     },
     cryptoInfo: {
         flex: 1,
+        marginRight: 8,
     },
     cryptoSymbol: {
-        fontSize: 14,
-        fontWeight: '400',
+        fontSize: 12,
+        fontWeight: '600',
         color: '#111827',
-        marginBottom: 4,
+        marginBottom: 2,
     },
     cryptoName: {
         fontSize: 8,
@@ -364,12 +361,14 @@ const styles = StyleSheet.create({
     },
     cryptoAmounts: {
         alignItems: 'flex-end',
+        flexShrink: 1,
+        maxWidth: '50%',
     },
     cryptoAmount: {
-        fontSize: 14,
-        fontWeight: '400',
+        fontSize: 11,
+        fontWeight: '500',
         color: '#111827',
-        marginBottom: 4,
+        marginBottom: 2,
     },
     cryptoUsdValue: {
         fontSize: 8,
@@ -417,6 +416,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         paddingVertical: 100,
+        paddingHorizontal: 40,
     },
     emptyText: {
         marginTop: 16,

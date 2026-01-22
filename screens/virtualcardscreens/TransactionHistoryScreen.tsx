@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -9,6 +9,9 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Share,
+  Platform,
+  Linking,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,6 +21,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
 import type { RouteProp } from '@react-navigation/native';
 import { useTransactionDetails } from '../../queries/transactionQueries';
+import ViewShot from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
 
 const { width } = Dimensions.get('window');
 
@@ -29,6 +34,7 @@ const TransactionHistoryScreen = () => {
   const route = useRoute<TransactionHistoryRouteProp>();
   const transactionType = route.params?.type || route.params?.transactionData?.type || 'funding';
   const routeTransactionData = route.params?.transactionData;
+  const viewShotRef = useRef<ViewShot>(null);
   
   // Get transaction ID from route data
   const transactionId = routeTransactionData?.transaction_id || routeTransactionData?.id;
@@ -422,6 +428,77 @@ const TransactionHistoryScreen = () => {
   
   const billPaymentDetails = getBillPaymentDetails();
 
+  // Handle screenshot capture and share
+  const handleShareReceipt = async () => {
+    if (isCrypto) {
+      // For crypto transactions, open blockchain explorer if txHash exists
+      const txHash = (transactionData as any)?.txHash || (transactionData as any)?.transaction_hash;
+      if (txHash) {
+        // Determine blockchain and open appropriate explorer
+        const network = (transactionData as any)?.network || 'bitcoin';
+        const currency = transactionData?.currency || 'BTC';
+        let explorerUrl = '';
+        
+        if (currency.includes('BTC') || currency === 'BTC') {
+          explorerUrl = `https://blockstream.info/tx/${txHash}`;
+        } else if (currency.includes('ETH') || currency === 'ETH') {
+          explorerUrl = `https://etherscan.io/tx/${txHash}`;
+        } else if (currency.includes('USDT') || currency === 'USDT') {
+          // USDT can be on multiple chains, default to Ethereum
+          explorerUrl = `https://etherscan.io/tx/${txHash}`;
+        } else {
+          explorerUrl = `https://blockstream.info/tx/${txHash}`;
+        }
+        
+        try {
+          await Linking.openURL(explorerUrl);
+        } catch (error) {
+          Alert.alert('Error', 'Unable to open blockchain explorer');
+        }
+      } else {
+        Alert.alert('Info', 'Transaction hash not available');
+      }
+      return;
+    }
+
+    // For non-crypto transactions, capture screenshot and share
+    try {
+      const viewShot = viewShotRef.current;
+      if (!viewShot || !viewShot.capture) {
+        Alert.alert('Error', 'Unable to capture receipt');
+        return;
+      }
+
+      // Capture the screenshot
+      const uri = await viewShot.capture();
+      
+      if (!uri) {
+        Alert.alert('Error', 'Failed to capture screenshot');
+        return;
+      }
+
+      // Check if sharing is available
+      const isAvailable = await Sharing.isAvailableAsync();
+      
+      if (isAvailable) {
+        // Share the image
+        await Sharing.shareAsync(uri, {
+          mimeType: 'image/png',
+          dialogTitle: 'Share Transaction Receipt',
+        });
+      } else {
+        // Fallback to React Native Share API
+        await Share.share({
+          message: 'Transaction Receipt',
+          url: uri,
+        });
+      }
+    } catch (error: any) {
+      console.error('Error sharing receipt:', error);
+      Alert.alert('Error', error.message || 'Failed to share receipt');
+    }
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar style="dark" />
@@ -460,23 +537,34 @@ const TransactionHistoryScreen = () => {
         </View>
       </ImageBackground>
       
-      <View style={styles.successMessageContainer}>
-        <ThemedText style={styles.successTitle}>Success</ThemedText>
-        <ThemedText style={styles.successMessage}>
-          {getSuccessMessage()}
-          <ThemedText style={styles.successAmount}>
-            {isCrypto ? getCryptoAmount() : isVirtualCard ? formatVirtualCardAmount(transactionData?.amount || 0, transactionData?.currency || 'USD') : amount}
-          </ThemedText>
-          {getVirtualCardWithdrawalSuffix()}
-        </ThemedText>
-      </View>
-
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* Transaction Details Card */}
-        <View style={styles.detailsCard}>
+        {/* Receipt Content - Wrapped in ViewShot for screenshot capture */}
+        <ViewShot
+          ref={viewShotRef}
+          options={{
+            format: 'png',
+            quality: 0.9,
+            result: 'tmpfile',
+          }}
+          style={styles.viewShotContainer}
+        >
+          {/* Success Message */}
+          <View style={styles.successMessageContainer}>
+            <ThemedText style={styles.successTitle}>Success</ThemedText>
+            <ThemedText style={styles.successMessage}>
+              {getSuccessMessage()}
+              <ThemedText style={styles.successAmount}>
+                {isCrypto ? getCryptoAmount() : isVirtualCard ? formatVirtualCardAmount(transactionData?.amount || 0, transactionData?.currency || 'USD') : amount}
+              </ThemedText>
+              {getVirtualCardWithdrawalSuffix()}
+            </ThemedText>
+          </View>
+
+          {/* Transaction Details Card */}
+          <View style={styles.detailsCard}>
           {/* Virtual Card Transaction Fields */}
           {isVirtualCard ? (
             <>
@@ -952,21 +1040,26 @@ const TransactionHistoryScreen = () => {
             <ThemedText style={styles.detailLabel}>Date</ThemedText>
             <ThemedText style={styles.detailValue}>{date}</ThemedText>
           </View>
-        </View>
-        
-        {/* Token Section for Electricity */}
-        {isElectricity && (transactionData as any)?.token && (
-          <View style={styles.tokenCard}>
-            <ThemedText style={styles.tokenLabel}>Token</ThemedText>
-            <ThemedText style={styles.tokenValue}>{(transactionData as any).token}</ThemedText>
-            <TouchableOpacity style={styles.copyTokenButton}>
-              <ThemedText style={styles.copyTokenButtonText}>Copy Token</ThemedText>
-            </TouchableOpacity>
+          
+          {/* Token Section for Electricity */}
+          {isElectricity && (transactionData as any)?.token && (
+            <View style={styles.tokenCard}>
+              <ThemedText style={styles.tokenLabel}>Token</ThemedText>
+              <ThemedText style={styles.tokenValue}>{(transactionData as any).token}</ThemedText>
+              <TouchableOpacity style={styles.copyTokenButton}>
+                <ThemedText style={styles.copyTokenButtonText}>Copy Token</ThemedText>
+              </TouchableOpacity>
+            </View>
+          )}
           </View>
-        )}
+        </ViewShot>
 
         {/* Share Receipt or View on Blockchain Button */}
-        <TouchableOpacity style={styles.shareButton}>
+        <TouchableOpacity 
+          style={styles.shareButton}
+          onPress={handleShareReceipt}
+          activeOpacity={0.7}
+        >
           <ThemedText style={styles.shareButtonText}>
             {isCrypto ? 'View on blockchain' : 'Share Receipt'}
           </ThemedText>
@@ -1054,6 +1147,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 10,
+    paddingBottom: 24,
   },
   successMessage: {
     fontSize: 14,
@@ -1070,6 +1164,9 @@ const styles = StyleSheet.create({
     paddingTop: 24,
     paddingBottom: 40,
   },
+  viewShotContainer: {
+    backgroundColor: '#FFFFFF',
+  },
   detailsCard: {
     backgroundColor: '#F3F4F6',
     borderRadius: 20,
@@ -1084,11 +1181,11 @@ const styles = StyleSheet.create({
    
   },
   detailLabel: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#6B7280',
   },
   detailValue: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '500',
     color: '#111827',
   },
@@ -1110,7 +1207,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   shareButtonText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '400',
     color: '#111827',
   },

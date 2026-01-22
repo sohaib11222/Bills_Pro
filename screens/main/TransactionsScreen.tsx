@@ -7,6 +7,8 @@ import {
   TouchableOpacity,
   Dimensions,
   Image,
+  RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -31,6 +33,7 @@ const TransactionsScreen = () => {
   const [selectedTransactionType, setSelectedTransactionType] = useState<TransactionType>('Deposit');
   const [showTransactionTypeDropdown, setShowTransactionTypeDropdown] = useState(false);
   const [showAllTransactionsDropdown, setShowAllTransactionsDropdown] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const timeframes: TimeframeType[] = ['7 Days', '30 Days', '90 Days'];
   const transactionTypes: TransactionType[] = ['Deposit', 'Withdrawal', 'Bill Payments'];
@@ -76,6 +79,20 @@ const TransactionsScreen = () => {
 
   const maxValue = Math.max(...chartData.map((d) => d.value));
 
+  // Handle pull to refresh
+  const onRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      // Simulate data refresh - replace with actual API call if needed
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // Here you would typically refetch transaction data
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar style="dark" />
@@ -83,6 +100,14 @@ const TransactionsScreen = () => {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            tintColor="#1B800F"
+            colors={['#1B800F']}
+          />
+        }
       >
         {/* Header */}
         <View style={styles.header}>

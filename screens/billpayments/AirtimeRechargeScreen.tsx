@@ -12,9 +12,12 @@ import {
     Pressable,
     ActivityIndicator,
     Alert,
+    KeyboardAvoidingView,
+    Platform,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -137,6 +140,65 @@ const AirtimeRechargeScreen = () => {
         setShowSummaryModal(false);
         setShowSecurityModal(true);
         setPin(''); // Reset PIN
+    };
+
+    // Handle biometric authentication for security
+    const handleSecurityBiometric = async () => {
+        // Validate that PIN is entered
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a 4-digit PIN first');
+            return;
+        }
+
+        if (!transactionId) {
+            Alert.alert('Error', 'Transaction ID is missing');
+            return;
+        }
+
+        try {
+            // Check if biometric hardware is available
+            const compatible = await LocalAuthentication.hasHardwareAsync();
+            if (!compatible) {
+                Alert.alert(
+                    'Biometric Not Available',
+                    'Biometric authentication is not available on this device. Please use the Next button instead.'
+                );
+                return;
+            }
+
+            // Check if biometrics are enrolled
+            const enrolled = await LocalAuthentication.isEnrolledAsync();
+            if (!enrolled) {
+                Alert.alert(
+                    'Biometric Not Set Up',
+                    'Please set up biometric authentication (fingerprint or face ID) in your device settings first.'
+                );
+                return;
+            }
+
+            // Authenticate using biometrics
+            const result = await LocalAuthentication.authenticateAsync({
+                promptMessage: 'Authenticate to confirm payment',
+                cancelLabel: 'Cancel',
+                disableDeviceFallback: false,
+            });
+
+            if (result.success) {
+                // Biometric authentication successful, proceed with security next
+                await handleSecurityNext();
+            } else {
+                // User cancelled or authentication failed
+                if (result.error === 'user_cancel') {
+                    // User cancelled, don't show error
+                    return;
+                } else {
+                    Alert.alert('Authentication Failed', 'Biometric authentication failed. Please try again.');
+                }
+            }
+        } catch (error: any) {
+            console.error('Biometric authentication error:', error);
+            Alert.alert('Error', 'An error occurred during biometric authentication. Please try again.');
+        }
     };
 
     // Handle confirm payment
@@ -295,12 +357,17 @@ const AirtimeRechargeScreen = () => {
     };
 
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView 
+            style={styles.container}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
             <StatusBar style="dark" />
 
             <ScrollView
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
             >
                 {/* Header */}
                 <View style={styles.header}>
@@ -705,7 +772,7 @@ const AirtimeRechargeScreen = () => {
                                 <View style={styles.numpadRow}>
                                     <TouchableOpacity
                                         style={styles.numButton}
-                                        onPress={() => {}}
+                                        onPress={handleSecurityBiometric}
                                         activeOpacity={0.7}
                                     >
                                         <Ionicons name="finger-print" size={24} color="#42AC36" />
@@ -964,7 +1031,7 @@ const AirtimeRechargeScreen = () => {
                     </Pressable>
                 </Pressable>
             </Modal>
-        </View>
+        </KeyboardAvoidingView>
     );
 };
 
@@ -975,7 +1042,7 @@ const styles = StyleSheet.create({
     },
     scrollContent: {
         paddingHorizontal: 20,
-        paddingBottom: 20,
+        paddingBottom: 100,
     },
     buttonContainer: {
         position: 'absolute',
@@ -1040,7 +1107,7 @@ const styles = StyleSheet.create({
         marginRight: 8,
     },
     balanceAmount: {
-        fontSize: 50,
+        fontSize: 25,
         fontWeight: '700',
         color: '#FFFFFF',
     },
@@ -1440,45 +1507,45 @@ const styles = StyleSheet.create({
     },
     numpadLeft: {
         flex: 1,
-        maxWidth: 290,
+        maxWidth: 280,
         marginLeft:10,
     },
     numpadRow: {
         flexDirection: 'row',
-        marginBottom: 10,
+        marginBottom: 8,
     },
     numButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
+        marginRight: 8,
     },
     numButtonText: {
-        fontSize: 30,
+        fontSize: 28,
         fontWeight: '400',
         color: '#000000',
     },
     backspaceButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
+        marginRight: 8,
     },
     numpadRight: {
-        width: 90,
-        marginLeft: 15,
+        width: 85,
+        marginLeft: 10,
         justifyContent: 'flex-start',
         alignItems: 'center',
     },
     nextButton: {
-        width: 90,
-        height: 200,
+        width: 85,
+        height: 150,
         backgroundColor: '#42AC36',
         borderRadius: 100,
         justifyContent: 'center',

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Alert, ActivityIndicator } from 'react-native';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -131,7 +131,11 @@ const KYCScreen = () => {
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
       <StatusBar style="light" />
       
       {/* Background Section */}
@@ -165,103 +169,109 @@ const KYCScreen = () => {
           <ThemedText style={styles.skipButtonText}>Skip</ThemedText>
         </TouchableOpacity>
 
-        {/* Title */}
-        <ThemedText weight='semibold' style={styles.title}>KYC</ThemedText>
-        
-        {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>Verify your account by completing your KYC</ThemedText>
+        <ScrollView
+          contentContainerStyle={styles.cardContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Title */}
+          <ThemedText weight='semibold' style={styles.title}>KYC</ThemedText>
+          
+          {/* Subtitle */}
+          <ThemedText style={styles.subtitle}>Verify your account by completing your KYC</ThemedText>
 
-        {/* Form */}
-        <View style={styles.formContainer}>
-          {/* First Name Input */}
-          <View style={styles.inputWrapper}>
-            <ThemedText style={styles.label}>First name</ThemedText>
+          {/* Form */}
+          <View style={styles.formContainer}>
+            {/* First Name Input */}
+            <View style={styles.inputWrapper}>
+              <ThemedText style={styles.label}>First name</ThemedText>
+              <View style={styles.inputContainer}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="First name"
+                  placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                  value={firstName}
+                  onChangeText={setFirstName}
+                />
+              </View>
+            </View>
+
+            {/* Last Name Input */}
             <View style={styles.inputContainer}>
               <TextInput
                 style={styles.input}
-                placeholder="First name"
+                placeholder="Last name"
                 placeholderTextColor="rgba(0, 0, 0, 0.5)"
-                value={firstName}
-                onChangeText={setFirstName}
+                value={lastName}
+                onChangeText={setLastName}
+              />
+            </View>
+
+            {/* Email Input */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="Email Address"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            {/* Date of Birth Input */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="Date of birth"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={dateOfBirth}
+                onChangeText={setDateOfBirth}
+              />
+              <Ionicons name="calendar-outline" size={20} color="rgba(0, 0, 0, 0.5)" style={styles.icon} />
+            </View>
+
+            {/* BVN Input */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="BVN Number"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={bvn}
+                onChangeText={setBvn}
+                keyboardType="number-pad"
+              />
+            </View>
+
+            {/* NIN Input */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="NIN Number"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={nin}
+                onChangeText={setNin}
+                keyboardType="number-pad"
               />
             </View>
           </View>
 
-          {/* Last Name Input */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Last name"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={lastName}
-              onChangeText={setLastName}
-            />
-          </View>
-
-          {/* Email Input */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Email Address"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </View>
-
-          {/* Date of Birth Input */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={[styles.input, { flex: 1 }]}
-              placeholder="Date of birth"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={dateOfBirth}
-              onChangeText={setDateOfBirth}
-            />
-            <Ionicons name="calendar-outline" size={20} color="rgba(0, 0, 0, 0.5)" style={styles.icon} />
-          </View>
-
-          {/* BVN Input */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="BVN Number"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={bvn}
-              onChangeText={setBvn}
-              keyboardType="number-pad"
-            />
-          </View>
-
-          {/* NIN Input */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="NIN Number"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={nin}
-              onChangeText={setNin}
-              keyboardType="number-pad"
-            />
-          </View>
-        </View>
-
-        {/* Proceed Button */}
-        <TouchableOpacity 
-          style={[styles.proceedButton, submitKycMutation.isPending && styles.proceedButtonDisabled]}
-          onPress={handleSubmitKyc}
-          disabled={submitKycMutation.isPending}
-        >
-          {submitKycMutation.isPending ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
-          )}
-        </TouchableOpacity>
+          {/* Proceed Button */}
+          <TouchableOpacity 
+            style={[styles.proceedButton, submitKycMutation.isPending && styles.proceedButtonDisabled]}
+            onPress={handleSubmitKyc}
+            disabled={submitKycMutation.isPending}
+          >
+            {submitKycMutation.isPending ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -301,12 +311,15 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: height * 0.783, // ~730px
+    maxHeight: height * 0.783, // ~730px
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
-    paddingTop: 30,
     paddingHorizontal: 20,
+  },
+  cardContent: {
+    paddingTop: 30,
+    paddingBottom: 20,
   },
   skipButton: {
     position: 'absolute',
@@ -373,15 +386,13 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   proceedButton: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
+    marginTop: 20,
     backgroundColor: '#42ac36',
     height: 60,
     borderRadius: 100,
     justifyContent: 'center',
     alignItems: 'center',
+    marginBottom: 20,
   },
   proceedButtonText: {
     fontSize: 14,

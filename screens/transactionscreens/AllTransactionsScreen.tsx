@@ -1020,13 +1020,13 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   mainTitle: {
-    fontSize: 30,
+    fontSize: 20,
     fontWeight: '500',
     color: '#111827',
     marginBottom: 8,
   },
   subtitle: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '400',
     color: '#6B7280',
   },
@@ -1096,7 +1096,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   transactionType: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '400',
     color: '#111827',
     marginBottom: 4,
@@ -1112,7 +1112,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   transactionAmount: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '400',
     color: '#008000',
     marginBottom: 4,

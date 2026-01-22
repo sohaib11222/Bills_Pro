@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Alert, ActivityIndicator } from 'react-native';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -130,7 +130,11 @@ const VerifyScreen = () => {
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
       <StatusBar style="light" />
       
       {/* Background Section */}
@@ -151,67 +155,73 @@ const VerifyScreen = () => {
 
       {/* White Card */}
       <View style={styles.card}>
-        {/* Title */}
-        <ThemedText weight='semibold' style={styles.title}>Verify</ThemedText>
-        
-        {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>
-          A 5-digit code has been sent to {email ? email : 'your email'}
-        </ThemedText>
-
-        {/* Code Input Fields */}
-        <View style={styles.codeContainer}>
-          {code.map((digit, index) => (
-            <TextInput
-              key={index}
-              ref={(ref) => {
-                inputRefs.current[index] = ref;
-              }}
-              style={styles.codeInput}
-              value={digit}
-              onChangeText={(text) => handleCodeChange(text.slice(-1), index)}
-              onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, index)}
-              keyboardType="number-pad"
-              maxLength={1}
-              selectTextOnFocus
-            />
-          ))}
-        </View>
-
-        {/* Resend Timer/Button */}
-        {timeLeft > 0 ? (
-          <ThemedText style={styles.resendText}>
-            You can resend code in{' '}
-            <ThemedText style={styles.timerText}>00:{String(timeLeft).padStart(2, '0')} sec</ThemedText>
+        <ScrollView
+          contentContainerStyle={styles.cardContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Title */}
+          <ThemedText weight='semibold' style={styles.title}>Verify</ThemedText>
+          
+          {/* Subtitle */}
+          <ThemedText style={styles.subtitle}>
+            A 5-digit code has been sent to {email ? email : 'your email'}
           </ThemedText>
-        ) : (
+
+          {/* Code Input Fields */}
+          <View style={styles.codeContainer}>
+            {code.map((digit, index) => (
+              <TextInput
+                key={index}
+                ref={(ref) => {
+                  inputRefs.current[index] = ref;
+                }}
+                style={styles.codeInput}
+                value={digit}
+                onChangeText={(text) => handleCodeChange(text.slice(-1), index)}
+                onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, index)}
+                keyboardType="number-pad"
+                maxLength={1}
+                selectTextOnFocus
+              />
+            ))}
+          </View>
+
+          {/* Resend Timer/Button */}
+          {timeLeft > 0 ? (
+            <ThemedText style={styles.resendText}>
+              You can resend code in{' '}
+              <ThemedText style={styles.timerText}>00:{String(timeLeft).padStart(2, '0')} sec</ThemedText>
+            </ThemedText>
+          ) : (
+            <TouchableOpacity 
+              onPress={handleResendOtp}
+              disabled={isResending || resendMutation.isPending}
+              style={styles.resendButton}
+            >
+              {isResending || resendMutation.isPending ? (
+                <ActivityIndicator size="small" color="#42ac36" />
+              ) : (
+                <ThemedText style={styles.resendButtonText}>Resend Code</ThemedText>
+              )}
+            </TouchableOpacity>
+          )}
+
+          {/* Proceed Button */}
           <TouchableOpacity 
-            onPress={handleResendOtp}
-            disabled={isResending || resendMutation.isPending}
-            style={styles.resendButton}
+            style={[styles.proceedButton, verifyMutation.isPending && styles.proceedButtonDisabled]}
+            onPress={handleVerify}
+            disabled={verifyMutation.isPending || code.join('').length !== 5}
           >
-            {isResending || resendMutation.isPending ? (
-              <ActivityIndicator size="small" color="#42ac36" />
+            {verifyMutation.isPending ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
-              <ThemedText style={styles.resendButtonText}>Resend Code</ThemedText>
+              <ThemedText style={styles.proceedButtonText}>Verify</ThemedText>
             )}
           </TouchableOpacity>
-        )}
-
-        {/* Proceed Button */}
-        <TouchableOpacity 
-          style={[styles.proceedButton, verifyMutation.isPending && styles.proceedButtonDisabled]}
-          onPress={handleVerify}
-          disabled={verifyMutation.isPending || code.join('').length !== 5}
-        >
-          {verifyMutation.isPending ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <ThemedText style={styles.proceedButtonText}>Verify</ThemedText>
-          )}
-        </TouchableOpacity>
+        </ScrollView>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -251,12 +261,15 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: height * 0.40, // ~335px
+    maxHeight: height * 0.40, // ~335px
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
-    paddingTop: 30,
     paddingHorizontal: 20,
+  },
+  cardContent: {
+    paddingTop: 30,
+    paddingBottom: 20,
   },
   title: {
     fontSize: 30,

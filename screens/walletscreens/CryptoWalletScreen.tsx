@@ -436,7 +436,7 @@ const styles = StyleSheet.create({
         height: 60,
     },
     balanceAmount: {
-        fontSize: 40,
+        fontSize: 25,
         fontWeight: '600',
         color: '#FFFFFF',
         marginBottom: 8,

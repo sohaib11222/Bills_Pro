@@ -49,6 +49,7 @@ const WithdrawCardScreen = () => {
   const [withdrawAmount, setWithdrawAmount] = useState<string>('');
   const [showSummary, setShowSummary] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [withdrawalTransactionData, setWithdrawalTransactionData] = useState<any>(null);
 
   const quickAmounts = ['2,000', '5,000', '10,000', '20,000'];
 
@@ -125,6 +126,22 @@ const WithdrawCardScreen = () => {
       console.log('🟢 Withdraw Card - API Response:', JSON.stringify(result, null, 2));
 
       if (result.success) {
+        // Store transaction data from API response
+        const transactionData = result.data || {
+          id: result.data?.id || result.data?.transaction_id,
+          transaction_id: result.data?.transaction_id || result.data?.id,
+          type: 'card_withdrawal',
+          amount: amountUsd,
+          currency: 'USD',
+          status: result.data?.status || 'completed',
+          wallet_type: 'virtual_card',
+          card_id: cardId,
+          payment_wallet_type: 'naira_wallet',
+          created_at: result.data?.created_at || new Date().toISOString(),
+          ...result.data,
+        };
+        
+        setWithdrawalTransactionData(transactionData);
         setShowSummary(false);
         setShowSuccess(true);
       } else {
@@ -473,7 +490,31 @@ const WithdrawCardScreen = () => {
                 style={styles.transactionButton}
                 onPress={() => {
                   setShowSuccess(false);
-                  navigation.navigate('TransactionHistory', { type: 'withdrawal' });
+                  // Pass transaction data if available, otherwise construct from available info
+                  if (withdrawalTransactionData) {
+                    navigation.navigate('TransactionHistory', {
+                      type: 'virtual_card',
+                      transactionData: withdrawalTransactionData,
+                      cardId,
+                    });
+                  } else {
+                    // Fallback: construct transaction data from available info
+                    const fallbackTransactionData = {
+                      type: 'card_withdrawal',
+                      amount: parseFloat(withdrawAmount.replace(/,/g, '')) || 0,
+                      currency: 'USD',
+                      status: 'completed',
+                      wallet_type: 'virtual_card',
+                      card_id: cardId,
+                      payment_wallet_type: 'naira_wallet',
+                      created_at: new Date().toISOString(),
+                    };
+                    navigation.navigate('TransactionHistory', {
+                      type: 'virtual_card',
+                      transactionData: fallbackTransactionData,
+                      cardId,
+                    });
+                  }
                 }}
               >
                 <ThemedText style={styles.transactionButtonText}>Transaction</ThemedText>

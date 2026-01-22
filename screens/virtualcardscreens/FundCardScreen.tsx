@@ -52,6 +52,7 @@ const FundCardScreen = () => {
   const [selectedWallet, setSelectedWallet] = useState<'naira' | 'crypto'>('naira');
   const [showSummary, setShowSummary] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [fundingTransactionData, setFundingTransactionData] = useState<any>(null);
 
   const quickAmounts = ['2,000', '5,000', '10,000', '20,000'];
 
@@ -140,6 +141,22 @@ const FundCardScreen = () => {
       console.log('🟢 Fund Card - API Response:', JSON.stringify(result, null, 2));
 
       if (result.success) {
+        // Store transaction data from API response
+        const transactionData = result.data || {
+          id: result.data?.id || result.data?.transaction_id,
+          transaction_id: result.data?.transaction_id || result.data?.id,
+          type: 'card_funding',
+          amount: amountUsd,
+          currency: 'USD',
+          status: result.data?.status || 'completed',
+          wallet_type: 'virtual_card',
+          card_id: cardId,
+          payment_wallet_type: selectedWallet === 'naira' ? 'naira_wallet' : 'crypto_wallet',
+          created_at: result.data?.created_at || new Date().toISOString(),
+          ...result.data,
+        };
+        
+        setFundingTransactionData(transactionData);
         setShowSummary(false);
         setShowSuccess(true);
       } else {
@@ -594,7 +611,31 @@ const FundCardScreen = () => {
                 style={styles.transactionButton}
                 onPress={() => {
                   setShowSuccess(false);
-                  navigation.navigate('TransactionHistory', { type: 'virtual_card', cardId });
+                  // Pass transaction data if available, otherwise just pass type and cardId
+                  if (fundingTransactionData) {
+                    navigation.navigate('TransactionHistory', {
+                      type: 'virtual_card',
+                      transactionData: fundingTransactionData,
+                      cardId,
+                    });
+                  } else {
+                    // Fallback: try to construct transaction data from available info
+                    const fallbackTransactionData = {
+                      type: 'card_funding',
+                      amount: parseFloat(depositAmount.replace(/,/g, '')) || 0,
+                      currency: 'USD',
+                      status: 'completed',
+                      wallet_type: 'virtual_card',
+                      card_id: cardId,
+                      payment_wallet_type: selectedWallet === 'naira' ? 'naira_wallet' : 'crypto_wallet',
+                      created_at: new Date().toISOString(),
+                    };
+                    navigation.navigate('TransactionHistory', {
+                      type: 'virtual_card',
+                      transactionData: fallbackTransactionData,
+                      cardId,
+                    });
+                  }
                 }}
               >
                 <ThemedText style={styles.transactionButtonText}>Transaction</ThemedText>

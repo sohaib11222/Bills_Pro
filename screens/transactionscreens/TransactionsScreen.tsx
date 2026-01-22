@@ -7,6 +7,7 @@ import {
   Dimensions,
   Image,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -39,6 +40,7 @@ const TransactionsScreen = () => {
   const [selectedTransactionType, setSelectedTransactionType] = useState<TransactionType>('Deposit');
   const [showTransactionTypeDropdown, setShowTransactionTypeDropdown] = useState(false);
   const [showAllTransactionsDropdown, setShowAllTransactionsDropdown] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   // Button refs and positions for dropdowns
   const timeframeButtonRef = useRef<View>(null);
@@ -61,7 +63,7 @@ const TransactionsScreen = () => {
 
   // API calls
   const period = getPeriodFromTimeframe(selectedTimeframe);
-  const { data: statsData, isLoading: isLoadingStats } = useTransactionStats(period);
+  const { data: statsData, isLoading: isLoadingStats, refetch: refetchStats } = useTransactionStats(period);
 
   // Calculate date range based on timeframe
   const getDateRange = (timeframe: TimeframeType) => {
@@ -134,7 +136,7 @@ const TransactionsScreen = () => {
     ...dateRange,
   }), [selectedCurrency, selectedTransactionType, dateRange]);
 
-  const { data: chartTransactionsData } = useAllTransactions(chartTransactionsFilters);
+  const { data: chartTransactionsData, refetch: refetchChartTransactions } = useAllTransactions(chartTransactionsFilters);
 
   // Helper functions
   const formatDate = (dateString: string): string => {
@@ -310,6 +312,27 @@ const TransactionsScreen = () => {
 
   const maxValue = Math.max(...chartData.map((d) => d.value), 1);
 
+  // Handle pull to refresh
+  const onRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      // Refetch all relevant queries based on current selections
+      await Promise.all([
+        refetchStats(),
+        refetchDeposits(),
+        refetchWithdrawals(),
+        refetchBillPayments(),
+        refetchCrypto(),
+        refetchVirtualCard(),
+        refetchChartTransactions(),
+      ]);
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   // Loading state
   const isLoading = isLoadingStats || isLoadingDeposits || isLoadingWithdrawals || 
                     isLoadingBillPayments || isLoadingCrypto || isLoadingVirtualCard;
@@ -329,6 +352,14 @@ const TransactionsScreen = () => {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            tintColor="#1B800F"
+            colors={['#1B800F']}
+          />
+        }
       >
         {/* Header */}
         <View style={styles.header}>
@@ -532,8 +563,8 @@ const TransactionsScreen = () => {
             }}
             activeOpacity={0.8}
           >
-            <ThemedText style={styles.allTransactionsButtonText}>All Transactions</ThemedText>
-            <Ionicons name="chevron-down" size={12} color="#6B7280" />
+            <ThemedText style={styles.allTransactionsButtonText} numberOfLines={1}>All Transactions</ThemedText>
+            <Ionicons name="chevron-down" size={10} color="#6B7280" />
           </TouchableOpacity>
 
           {/* Transaction List */}
@@ -695,7 +726,7 @@ const TransactionsScreen = () => {
                   refetchDeposits();
                   refetchWithdrawals();
                   refetchBillPayments();
-                  refetchChart();
+                  refetchChartTransactions();
                 }}
                 activeOpacity={0.8}
               >
@@ -875,7 +906,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   depositsAmount: {
-    fontSize: 30,
+    fontSize: 20,
     fontWeight: '700',
     color: '#111827',
     marginBottom: 25,
@@ -979,7 +1010,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#1B800F',
   },
   chartTooltipText: {
-    fontSize: 14,
+    fontSize: 8,
     fontWeight: '400',
     color: '#FFFFFF',
   },
@@ -1024,16 +1055,17 @@ const styles = StyleSheet.create({
     borderRadius: 100,
     borderWidth: 0.3,
     borderColor: '#0000004D',
-    width: '26%',
-    paddingHorizontal: 12,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
     paddingVertical: 8,
     marginBottom: 16,
-    gap: 8,
+    gap: 4,
   },
   allTransactionsButtonText: {
     fontSize: 8,
     fontWeight: '400',
     color: '#111827',
+    flexShrink: 1,
   },
   transactionList: {
     gap: 12,

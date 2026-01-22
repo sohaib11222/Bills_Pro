@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -27,6 +27,7 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const HomeScreen = () => {
   const navigation = useNavigation<RootNavigationProp>();
+  const scrollViewRef = useRef<ScrollView>(null);
   const [showWallets, setShowWallets] = useState(false);
   const [selectedWallet, setSelectedWallet] = useState<'naira' | 'crypto'>('naira');
   const [isBalanceHidden, setIsBalanceHidden] = useState(false);
@@ -66,6 +67,11 @@ const HomeScreen = () => {
     setIsRefreshing(true);
     try {
       await Promise.all([refetchDashboard(), refetchWalletBalance()]);
+      // Reload profile image on refresh
+      const storedImage = await getProfileImage();
+      if (storedImage) {
+        setProfileImageUri(storedImage);
+      }
     } catch (error) {
       console.error('Error refreshing data:', error);
     } finally {
@@ -144,6 +150,7 @@ const HomeScreen = () => {
         resizeMode="cover"
       >
         <ScrollView
+          ref={scrollViewRef}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
@@ -152,6 +159,8 @@ const HomeScreen = () => {
               onRefresh={onRefresh}
               tintColor="#FFFFFF"
               colors={['#FFFFFF']}
+              progressViewOffset={20}
+              size="large"
             />
           }
         >
@@ -664,7 +673,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   balanceLabel: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#FFFFFF80',
   },
   balanceChevron: {
@@ -675,7 +684,7 @@ const styles = StyleSheet.create({
     fontWeight: '400',
   },
   balanceValue: {
-    fontSize: 50,
+    fontSize: 30,
     fontWeight: '700',
     color: '#FFFFFF',
   },

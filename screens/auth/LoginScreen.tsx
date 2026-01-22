@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Linking, Alert, ActivityIndicator } from 'react-native';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Linking, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
@@ -62,7 +62,11 @@ const LoginScreen = () => {
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
       <StatusBar style="light" />
       
       {/* Background Section */}
@@ -84,83 +88,89 @@ const LoginScreen = () => {
           <ThemedText style={styles.registerButtonText}>Register</ThemedText>
         </TouchableOpacity>
 
-        {/* Title */}
-        <ThemedText weight='semibold' style={styles.title}>Login</ThemedText>
-        
-        {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>Login to your account</ThemedText>
+        <ScrollView
+          contentContainerStyle={styles.cardContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Title */}
+          <ThemedText weight='semibold' style={styles.title}>Login</ThemedText>
+          
+          {/* Subtitle */}
+          <ThemedText style={styles.subtitle}>Login to your account</ThemedText>
 
-        {/* Form */}
-        <View style={styles.formContainer}>
-          {/* Email Input */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Email Address"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
+          {/* Form */}
+          <View style={styles.formContainer}>
+            {/* Email Input */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="Email Address"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            {/* Password Input */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="Password"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoCapitalize="none"
+              />
+            </View>
+
+            {/* Forgot Password */}
+            <TouchableOpacity
+              style={styles.forgotPasswordContainer}
+              onPress={() => navigation.navigate('ResetPassword')}
+            >
+              <ThemedText style={styles.forgotPasswordText}>Forgot Password ?</ThemedText>
+            </TouchableOpacity>
+
+            {/* Login Button */}
+            <TouchableOpacity 
+              style={[styles.loginButton, (loginMutation.isPending || !email.trim() || !password.trim()) && styles.loginButtonDisabled]}
+              onPress={handleLogin}
+              disabled={loginMutation.isPending || !email.trim() || !password.trim()}
+            >
+              {loginMutation.isPending ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <ThemedText style={styles.loginButtonText}>Login</ThemedText>
+              )}
+            </TouchableOpacity>
           </View>
 
-          {/* Password Input */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              autoCapitalize="none"
-            />
+          {/* Legal Text */}
+          <View style={styles.legalContainer}>
+            <ThemedText style={styles.legalText}>
+              By proceeding you agree with Bill's Pro{' '}
+              <ThemedText 
+                style={styles.legalLink}
+                onPress={() => Linking.openURL('https://example.com/terms')}
+              >
+                terms of use
+              </ThemedText>
+              {' '}and{' '}
+              <ThemedText 
+                style={styles.legalLink}
+                onPress={() => Linking.openURL('https://example.com/privacy')}
+              >
+                privacy policy
+              </ThemedText>
+            </ThemedText>
           </View>
-
-          {/* Forgot Password */}
-          <TouchableOpacity
-            style={styles.forgotPasswordContainer}
-            onPress={() => navigation.navigate('ResetPassword')}
-          >
-            <ThemedText style={styles.forgotPasswordText}>Forgot Password ?</ThemedText>
-          </TouchableOpacity>
-
-          {/* Login Button */}
-          <TouchableOpacity 
-            style={[styles.loginButton, (loginMutation.isPending || !email.trim() || !password.trim()) && styles.loginButtonDisabled]}
-            onPress={handleLogin}
-            disabled={loginMutation.isPending || !email.trim() || !password.trim()}
-          >
-            {loginMutation.isPending ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <ThemedText style={styles.loginButtonText}>Login</ThemedText>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* Legal Text */}
-        <View style={styles.legalContainer}>
-          <ThemedText style={styles.legalText}>
-            By proceeding you agree with Bill's Pro{' '}
-            <ThemedText 
-              style={styles.legalLink}
-              onPress={() => Linking.openURL('https://example.com/terms')}
-            >
-              terms of use
-            </ThemedText>
-            {' '}and{' '}
-            <ThemedText 
-              style={styles.legalLink}
-              onPress={() => Linking.openURL('https://example.com/privacy')}
-            >
-              privacy policy
-            </ThemedText>
-          </ThemedText>
-        </View>
+        </ScrollView>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -189,12 +199,15 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: height * 0.485, // ~452px
+    maxHeight: height * 0.485, // ~452px
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
-    paddingTop: 30,
     paddingHorizontal: 20,
+  },
+  cardContent: {
+    paddingTop: 30,
+    paddingBottom: 20,
   },
   registerButton: {
     position: 'absolute',
@@ -206,6 +219,8 @@ const styles = StyleSheet.create({
     borderRadius: 100,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 1000,
+    elevation: 5,
   },
   registerButtonText: {
     fontSize: 14,
@@ -275,11 +290,9 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   legalContainer: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
+    marginTop: 20,
     alignItems: 'center',
+    paddingBottom: 20,
   },
   legalText: {
     fontSize: 10,

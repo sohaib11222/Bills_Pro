@@ -685,7 +685,7 @@ const styles = StyleSheet.create({
         alignItems: 'baseline',
     },
     balanceAmount: {
-        fontSize: 50,
+        fontSize: 25,
         fontWeight: '700',
         color: '#FFFFFF',
         marginRight: 8,

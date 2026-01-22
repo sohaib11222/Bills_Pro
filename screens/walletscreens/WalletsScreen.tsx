@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -26,6 +26,7 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const WalletsScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
+    const scrollViewRef = useRef<ScrollView>(null);
     const [selectedTab, setSelectedTab] = useState<'Naira' | 'Crypto'>('Naira');
     const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -200,6 +201,7 @@ const WalletsScreen = () => {
                 </View>
             </ImageBackground>
             <ScrollView
+                ref={scrollViewRef}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scrollContent}
                 style={styles.scrollViewContainer}
@@ -209,6 +211,8 @@ const WalletsScreen = () => {
                         onRefresh={onRefresh}
                         tintColor="#1B800F"
                         colors={['#1B800F']}
+                        progressViewOffset={20}
+                        size="large"
                     />
                 }
             >
@@ -605,14 +609,14 @@ const styles = StyleSheet.create({
 
     },
     walletBalanceLabel: {
-        fontSize: 12,
+        fontSize: 10,
         fontWeight: '400',
         color: '#FFFFFF',
         marginBottom: 8,
         opacity: 0.9,
     },
     walletBalanceAmount: {
-        fontSize: 40,
+        fontSize: 25,
         fontWeight: '700',
         color: '#FFFFFF',
     },
@@ -698,7 +702,7 @@ const styles = StyleSheet.create({
         height: 24,
     },
     actionButtonText: {
-        fontSize: 12,
+        fontSize: 10,
         fontWeight: '400',
         color: '#111827',
     },
@@ -714,7 +718,7 @@ const styles = StyleSheet.create({
         color: '#111827',
     },
     viewAllText: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '400',
         color: '#1B800F',
     },
@@ -746,7 +750,7 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     transactionType: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '400',
         color: '#111827',
         marginBottom: 4,
@@ -759,7 +763,7 @@ const styles = StyleSheet.create({
         alignItems: 'flex-end',
     },
     transactionAmount: {
-        fontSize: 14,
+        fontSize: 10,
         fontWeight: '400',
         color: '#1B800F',
         marginBottom: 4,
@@ -824,7 +828,7 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     cryptoAssetSymbol: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '400',
 
         marginBottom: 4,
@@ -838,7 +842,7 @@ const styles = StyleSheet.create({
         alignItems: 'flex-end',
     },
     cryptoAssetAmount: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '400',
         color: '#111827',
         marginBottom: 4,

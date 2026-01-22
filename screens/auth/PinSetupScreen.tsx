@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Image, StyleSheet, TouchableOpacity, Dimensions, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -71,33 +71,39 @@ const PinSetupScreen = () => {
           <ThemedText style={styles.skipButtonText}>Skip</ThemedText>
         </TouchableOpacity>
 
-        {/* Title */}
-        <ThemedText weight='semibold' style={styles.title}>Setup Pin</ThemedText>
-        
-        {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>Setup your 4 digit pin to complete transactions</ThemedText>
+        <ScrollView
+          contentContainerStyle={styles.cardContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Title */}
+          <ThemedText weight='semibold' style={styles.title}>Setup Pin</ThemedText>
+          
+          {/* Subtitle */}
+          <ThemedText style={styles.subtitle}>Setup your 4 digit pin to complete transactions</ThemedText>
 
-        {/* Security Icon */}
-        <View style={styles.iconContainer}>
-          <Image 
-            source={require('../../assets/security-safe.png')} 
-            style={styles.securityIcon}
-            resizeMode="contain"
-          />
-        </View>
-
-        {/* PIN Input Fields */}
-        <View style={styles.pinContainer}>
-          {[0, 1, 2, 3].map((index) => (
-            <View
-              key={index}
-              style={[
-                styles.pinDot,
-                pin.length > index && styles.pinDotFilled,
-              ]}
+          {/* Security Icon */}
+          <View style={styles.iconContainer}>
+            <Image 
+              source={require('../../assets/security-safe.png')} 
+              style={styles.securityIcon}
+              resizeMode="contain"
             />
-          ))}
-        </View>
+          </View>
+
+          {/* PIN Input Fields */}
+          <View style={styles.pinContainer}>
+            {[0, 1, 2, 3].map((index) => (
+              <View
+                key={index}
+                style={[
+                  styles.pinDot,
+                  pin.length > index && styles.pinDotFilled,
+                ]}
+              />
+            ))}
+          </View>
+        </ScrollView>
 
         {/* Numpad */}
         <View style={styles.numpadContainer}>
@@ -221,8 +227,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
-    paddingTop: 30,
     paddingHorizontal: 20,
+  },
+  cardContent: {
+    paddingTop: 30,
+    paddingBottom: 340, // Space for numpad
   },
   skipButton: {
     position: 'absolute',

@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -57,6 +58,67 @@ const DepositFundsScreen = () => {
     const handleQuickAmount = (amount: string) => {
         setSelectedQuickAmount(amount);
         setDepositAmount(amount.replace(/,/g, ''));
+    };
+
+    const handleBiometric = async () => {
+        // First validate that amount is entered
+        if (depositAmount.trim() === '') {
+            Alert.alert('Error', 'Please enter a deposit amount first');
+            return;
+        }
+
+        const amount = parseFloat(depositAmount.replace(/,/g, ''));
+        
+        // Validate minimum amount
+        if (amount < 100) {
+            Alert.alert('Error', 'Minimum deposit amount is N100');
+            return;
+        }
+
+        try {
+            // Check if biometric hardware is available
+            const compatible = await LocalAuthentication.hasHardwareAsync();
+            if (!compatible) {
+                Alert.alert(
+                    'Biometric Not Available',
+                    'Biometric authentication is not available on this device. Please use the Next button instead.'
+                );
+                return;
+            }
+
+            // Check if biometrics are enrolled
+            const enrolled = await LocalAuthentication.isEnrolledAsync();
+            if (!enrolled) {
+                Alert.alert(
+                    'Biometric Not Set Up',
+                    'Please set up biometric authentication (fingerprint or face ID) in your device settings first.'
+                );
+                return;
+            }
+
+            // Authenticate using biometrics
+            const result = await LocalAuthentication.authenticateAsync({
+                promptMessage: 'Authenticate to proceed with deposit',
+                cancelLabel: 'Cancel',
+                disableDeviceFallback: false,
+            });
+
+            if (result.success) {
+                // Biometric authentication successful, proceed with deposit
+                await handleNext();
+            } else {
+                // User cancelled or authentication failed
+                if (result.error === 'user_cancel') {
+                    // User cancelled, don't show error
+                    return;
+                } else {
+                    Alert.alert('Authentication Failed', 'Biometric authentication failed. Please try again.');
+                }
+            }
+        } catch (error: any) {
+            console.error('Biometric authentication error:', error);
+            Alert.alert('Error', 'An error occurred during biometric authentication. Please try again.');
+        }
     };
 
     const handleNext = async () => {
@@ -255,7 +317,7 @@ const DepositFundsScreen = () => {
                     <View style={styles.numpadRow}>
                         <TouchableOpacity
                             style={styles.numButton}
-                            onPress={() => {}}
+                            onPress={handleBiometric}
                             activeOpacity={0.7}
                         >
                             <Ionicons name="finger-print" size={24} color="#42AC36" />
@@ -367,7 +429,7 @@ const styles = StyleSheet.create({
         marginRight: 8,
     },
     balanceAmount: {
-        fontSize: 50,
+        fontSize: 25,
         fontWeight: '700',
         color: '#FFFFFF',
     },
@@ -463,45 +525,44 @@ const styles = StyleSheet.create({
     },
     numpadLeft: {
         flex: 1,
-        maxWidth: 290,
+        maxWidth: 280,
     },
     numpadRow: {
         flexDirection: 'row',
-        marginBottom: 10,
+        marginBottom: 8,
     },
     numButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
+        marginRight: 8,
     },
     numButtonText: {
-        fontSize: 30,
+        fontSize: 28,
         fontWeight: '400',
         color: '#000000',
     },
     numpadRight: {
-        width: 90,
-        marginLeft: 15,
+        width: 85,
+        marginLeft: 10,
         justifyContent: 'flex-start',
         alignItems: 'center',
     },
     backspaceButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
-        marginBottom: 10,
+        marginRight: 8,
     },
     nextButton: {
-        width: 90,
-        height: 200,
+        width: 85,
+        height: 150,
         backgroundColor: '#42AC36',
         borderRadius: 100,
         justifyContent: 'center',
