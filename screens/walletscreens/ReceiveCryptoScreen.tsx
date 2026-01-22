@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -8,25 +8,49 @@ import {
     Dimensions,
     Modal,
     Pressable,
+    ActivityIndicator,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Clipboard from 'expo-clipboard';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useCryptoDepositAddress } from '../../queries/cryptoQueries';
+import { useUsdtBlockchains } from '../../queries/cryptoQueries';
+
+// QR Code Component
+import QRCodeSVG from 'react-native-qrcode-svg';
 
 const { width } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type ReceiveCryptoRouteProp = RouteProp<RootStackParamList, 'ReceiveCrypto'>;
 
-const networks = [
-    { id: 'BTC', name: 'BTC (Bitcoin)', creditingTime: '1 min' },
-    { id: 'LIGHTNING', name: 'LIGHTNING (Lightning Network)', creditingTime: '1 min' },
-    { id: 'BEP20', name: 'BEP20 (Binance Smart Chain)', creditingTime: '1 min' },
-];
+// Helper function to get crypto icon
+const getCryptoIcon = (currency: string) => {
+    const icons: Record<string, any> = {
+        'BTC': require('../../assets/popular1.png'),
+        'ETH': require('../../assets/popular2.png'),
+        'USDT': require('../../assets/popular3.png'),
+        'USDC': require('../../assets/popular4.png'),
+    };
+    return icons[currency] || require('../../assets/popular1.png');
+};
+
+// Helper function to get crypto color
+const getCryptoColor = (currency: string) => {
+    const colors: Record<string, string> = {
+        'BTC': '#FFA5004D',
+        'ETH': '#0000FF4D',
+        'USDT': '#0080004D',
+        'USDC': '#0000FF4D',
+    };
+    return colors[currency] || '#42AC36';
+};
 
 const ReceiveCryptoScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
@@ -36,19 +60,87 @@ const ReceiveCryptoScreen = () => {
         icon: require('../../assets/popular1.png'),
         iconBackground: '#FFA5004D',
     };
-    const { cryptoType, balance, usdValue, icon, iconBackground } = params;
-
-    const [selectedNetwork, setSelectedNetwork] = useState<string | null>('BTC');
+    const { cryptoType, balance, usdValue, icon: routeIcon, iconBackground: routeIconBackground, blockchain: routeBlockchain } = params;
+    
+    // Use route params or fallback to defaults
+    const icon = routeIcon || getCryptoIcon(cryptoType);
+    const iconBackground = routeIconBackground || getCryptoColor(cryptoType);
+    
+    // Fetch USDT blockchains if needed
+    const { data: blockchainsData } = useUsdtBlockchains();
+    
+    // Get available networks based on crypto type
+    const networks = useMemo(() => {
+        if (cryptoType === 'USDT' && blockchainsData?.data) {
+            return blockchainsData.data.map((bc: any) => ({
+                id: bc.blockchain,
+                name: `${bc.blockchain} (${bc.blockchain_name || bc.blockchain})`,
+                creditingTime: bc.crediting_time || '1 min',
+            }));
+        }
+        // For other cryptos, use default blockchain
+        return [{
+            id: cryptoType,
+            name: `${cryptoType} (${cryptoType})`,
+            creditingTime: '1 min',
+        }];
+    }, [cryptoType, blockchainsData]);
+    
+    // Get selected network ID (blockchain)
+    const [selectedNetworkId, setSelectedNetworkId] = useState<string | null>(
+        routeBlockchain || networks[0]?.id || null
+    );
+    const [selectedNetworkName, setSelectedNetworkName] = useState<string | null>(
+        networks[0]?.name || null
+    );
     const [showNetworkModal, setShowNetworkModal] = useState(false);
-    const depositAddress = '12334jje3294f2i3edmdei3nfwdnwiwejcjw';
-
-    const handleCopyAddress = () => {
-        // Copy address to clipboard
-        // You can use Clipboard from @react-native-clipboard/clipboard or expo-clipboard
+    
+    // Set default network on mount
+    useEffect(() => {
+        if (!selectedNetworkId && networks.length > 0) {
+            const defaultNetwork = networks[0];
+            setSelectedNetworkId(defaultNetwork.id);
+            setSelectedNetworkName(defaultNetwork.name);
+        }
+    }, [cryptoType, blockchainsData]);
+    
+    // Fetch deposit address
+    const { 
+        data: depositData, 
+        isLoading: isLoadingAddress, 
+        error: addressError,
+        refetch: refetchAddress 
+    } = useCryptoDepositAddress(
+        cryptoType, 
+        selectedNetworkId || cryptoType
+    );
+    
+    const depositAddress = depositData?.data?.deposit_address || '';
+    const qrCodeData = depositData?.data?.qr_code || depositAddress;
+    
+    const handleCopyAddress = async () => {
+        if (!depositAddress) {
+            Alert.alert('Error', 'No deposit address available');
+            return;
+        }
+        try {
+            await Clipboard.setStringAsync(depositAddress);
+            Alert.alert('Success', 'Address copied to clipboard');
+        } catch (error) {
+            Alert.alert('Error', 'Failed to copy address');
+        }
     };
 
     const handleSaveOrShare = () => {
         // Save or share address functionality
+        // For now, just copy to clipboard
+        handleCopyAddress();
+    };
+    
+    const handleNetworkSelect = (network: { id: string; name: string }) => {
+        setSelectedNetworkId(network.id);
+        setSelectedNetworkName(network.name);
+        setShowNetworkModal(false);
     };
 
     return (
@@ -84,20 +176,47 @@ const ReceiveCryptoScreen = () => {
                     </View>
                     <View style={styles.qrCodeContainer}>
                         <View style={styles.qrCodePlaceholder}>
-                            <View style={styles.qrCodeWrapper}>
-                                <Image
-                                    source={require('../../assets/qr_code.png')}
-                                    style={styles.qrCodeImage}
-                                    resizeMode="contain"
-                                />
-                                <View style={[styles.qrCodeIconContainer, { backgroundColor: iconBackground }]}>
-                                    <Image
-                                        source={icon}
-                                        style={styles.qrCodeIcon}
-                                        resizeMode="contain"
+                            {isLoadingAddress ? (
+                                <View style={styles.qrCodeLoadingContainer}>
+                                    <ActivityIndicator size="large" color="#1B800F" />
+                                    <ThemedText style={styles.qrCodeLoadingText}>Loading address...</ThemedText>
+                                </View>
+                            ) : addressError ? (
+                                <View style={styles.qrCodeErrorContainer}>
+                                    <Ionicons name="alert-circle" size={48} color="#EF4444" />
+                                    <ThemedText style={styles.qrCodeErrorText}>
+                                        Failed to load address
+                                    </ThemedText>
+                                    <TouchableOpacity
+                                        style={styles.retryButton}
+                                        onPress={() => refetchAddress()}
+                                        activeOpacity={0.8}
+                                    >
+                                        <ThemedText style={styles.retryButtonText}>Retry</ThemedText>
+                                    </TouchableOpacity>
+                                </View>
+                            ) : depositAddress ? (
+                                <View style={styles.qrCodeWrapper}>
+                                    <QRCodeSVG
+                                        value={qrCodeData || depositAddress}
+                                        size={width - 120}
+                                        color="#000000"
+                                        backgroundColor="#FFFFFF"
+                                        logo={icon}
+                                        logoSize={50}
+                                        logoBackgroundColor="#FFFFFF"
+                                        logoMargin={4}
+                                        logoBorderRadius={25}
+                                        quietZone={10}
                                     />
                                 </View>
-                            </View>
+                            ) : (
+                                <View style={styles.qrCodeEmptyContainer}>
+                                    <ThemedText style={styles.qrCodeEmptyText}>
+                                        Select a network to generate address
+                                    </ThemedText>
+                                </View>
+                            )}
                         </View>
                     </View>
                 </LinearGradient>
@@ -106,16 +225,29 @@ const ReceiveCryptoScreen = () => {
                 <View style={styles.addressFieldContainer}>
                     <ThemedText style={styles.addressFieldLabel}>Deposit Address</ThemedText>
                     <View style={styles.addressField}>
-                        <ThemedText style={styles.addressText} numberOfLines={1}>
-                            {depositAddress}
-                        </ThemedText>
-                        <TouchableOpacity
-                            style={styles.copyButton}
-                            onPress={handleCopyAddress}
-                            activeOpacity={0.8}
-                        >
-                            <Ionicons name="copy-outline" size={20} color="#6B7280" />
-                        </TouchableOpacity>
+                        {isLoadingAddress ? (
+                            <View style={styles.addressLoadingContainer}>
+                                <ActivityIndicator size="small" color="#1B800F" />
+                                <ThemedText style={styles.addressLoadingText}>Loading...</ThemedText>
+                            </View>
+                        ) : depositAddress ? (
+                            <>
+                                <ThemedText style={styles.addressText} numberOfLines={1}>
+                                    {depositAddress}
+                                </ThemedText>
+                                <TouchableOpacity
+                                    style={styles.copyButton}
+                                    onPress={handleCopyAddress}
+                                    activeOpacity={0.8}
+                                >
+                                    <Ionicons name="copy-outline" size={20} color="#6B7280" />
+                                </TouchableOpacity>
+                            </>
+                        ) : (
+                            <ThemedText style={styles.addressText} numberOfLines={1}>
+                                Select network to generate address
+                            </ThemedText>
+                        )}
                     </View>
                 </View>
 
@@ -128,7 +260,7 @@ const ReceiveCryptoScreen = () => {
                     <ThemedText style={styles.networkFieldLabel}>Network</ThemedText>
                     <View style={styles.networkField}>
                         <ThemedText style={styles.networkText}>
-                            {selectedNetwork || 'Select Network'}
+                            {selectedNetworkName || 'Select Network'}
                         </ThemedText>
                         <Ionicons name="chevron-down" size={20} color="#9CA3AF" />
                     </View>
@@ -178,11 +310,11 @@ const ReceiveCryptoScreen = () => {
                             {networks.map((network) => (
                                 <TouchableOpacity
                                     key={network.id}
-                                    style={styles.networkOption}
-                                    onPress={() => {
-                                        setSelectedNetwork(network.name);
-                                        setShowNetworkModal(false);
-                                    }}
+                                    style={[
+                                        styles.networkOption,
+                                        selectedNetworkId === network.id && styles.networkOptionSelected
+                                    ]}
+                                    onPress={() => handleNetworkSelect(network)}
                                     activeOpacity={0.8}
                                 >
                                     <View style={styles.networkInfo}>
@@ -191,6 +323,9 @@ const ReceiveCryptoScreen = () => {
                                             Crediting time = {network.creditingTime}
                                         </ThemedText>
                                     </View>
+                                    {selectedNetworkId === network.id && (
+                                        <Ionicons name="checkmark-circle" size={24} color="#1B800F" />
+                                    )}
                                 </TouchableOpacity>
                             ))}
                         </View>
@@ -419,6 +554,87 @@ const styles = StyleSheet.create({
     networkTime: {
         fontSize: 10,
         fontWeight: '400',
+        color: '#6B7280',
+    },
+    networkOptionSelected: {
+        backgroundColor: '#D6F5D9',
+        borderWidth: 1,
+        borderColor: '#1B800F',
+    },
+    qrCodeLoadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 12,
+    },
+    qrCodeLoadingText: {
+        fontSize: 12,
+        color: '#6B7280',
+    },
+    qrCodeErrorContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 12,
+        padding: 20,
+    },
+    qrCodeErrorText: {
+        fontSize: 12,
+        color: '#EF4444',
+        textAlign: 'center',
+    },
+    retryButton: {
+        backgroundColor: '#1B800F',
+        borderRadius: 8,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        marginTop: 8,
+    },
+    retryButtonText: {
+        fontSize: 12,
+        color: '#FFFFFF',
+        fontWeight: '400',
+    },
+    qrCodeFallback: {
+        width: '100%',
+        height: '100%',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    qrCodeFallbackText: {
+        fontSize: 10,
+        color: '#111827',
+        textAlign: 'center',
+        fontFamily: 'monospace',
+    },
+    qrCodeEmptyContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    qrCodeEmptyText: {
+        fontSize: 12,
+        color: '#6B7280',
+        textAlign: 'center',
+    },
+    addressLoadingContainer: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    addressLoadingText: {
+        fontSize: 14,
+        color: '#6B7280',
+    },
+    emptyNetworksContainer: {
+        padding: 20,
+        alignItems: 'center',
+    },
+    emptyNetworksText: {
+        fontSize: 14,
         color: '#6B7280',
     },
 });

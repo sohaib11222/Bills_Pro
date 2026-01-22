@@ -63,11 +63,13 @@ export type RootStackParamList = {
     wallet_type?: 'naira' | 'crypto' | 'virtual_card';
   };
   CryptoWallet: {
-    cryptoType: string;
-    balance: string;
-    usdValue: string;
-    icon: any;
-    iconBackground: string;
+    currency: string;
+    blockchain?: string;
+    cryptoType?: string; // Keep for backward compatibility
+    balance?: string;
+    usdValue?: string;
+    icon?: any;
+    iconBackground?: string;
   };
   SelectCrypto: { mode?: 'send' | 'sell' | 'buy' | 'receive' };
   SendCrypto: {
@@ -98,8 +100,9 @@ export type RootStackParamList = {
     cryptoType: string;
     balance?: string;
     usdValue?: string;
-    icon: any;
-    iconBackground: string;
+    icon?: any;
+    iconBackground?: string;
+    blockchain?: string;
   };
   EditProfile: undefined;
   Verification: undefined;
