@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -11,6 +11,7 @@ import {
     ActivityIndicator,
     Linking,
     Alert,
+    RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,10 +34,23 @@ const socialImages: Record<string, any> = {
 const SupportScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const { data: supportData, isLoading, isError, refetch } = useSupportInfo();
+    const [isRefreshing, setIsRefreshing] = useState(false);
 
     const supportInfo = supportData?.data || {};
     const contactOptions = supportInfo.contact_options || [];
     const socials = supportInfo.socials || [];
+
+    // Handle pull to refresh
+    const onRefresh = async () => {
+        setIsRefreshing(true);
+        try {
+            await refetch();
+        } catch (error) {
+            console.error('Error refreshing data:', error);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
 
     const handleEmailContact = (email: string) => {
         Linking.openURL(`mailto:${email}?subject=Support Request`).catch(() => {
@@ -92,6 +106,14 @@ const SupportScreen = () => {
                     style={styles.scrollView}
                     contentContainerStyle={styles.scrollContent}
                     showsVerticalScrollIndicator={false}
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={isRefreshing}
+                            onRefresh={onRefresh}
+                            tintColor="#42AC36"
+                            colors={['#42AC36']}
+                        />
+                    }
                 >
                     {/* Main Illustration Section */}
                     <View style={styles.illustrationSection}>

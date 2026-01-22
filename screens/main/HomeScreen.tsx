@@ -122,7 +122,7 @@ const HomeScreen = () => {
     return (
       <View style={[styles.container, styles.loadingContainer]}>
         <StatusBar style="light" />
-        <ActivityIndicator size="large" color="#FFFFFF" />
+        <ActivityIndicator size="large" color="#42AC36" />
       </View>
     );
   }
@@ -157,8 +157,8 @@ const HomeScreen = () => {
             <RefreshControl
               refreshing={isRefreshing}
               onRefresh={onRefresh}
-              tintColor="#FFFFFF"
-              colors={['#FFFFFF']}
+              tintColor="#42AC36"
+              colors={['#42AC36']}
               progressViewOffset={20}
               size="large"
             />

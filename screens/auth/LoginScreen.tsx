@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Linking, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { Ionicons } from '@expo/vector-icons';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -9,6 +11,8 @@ import type { CompositeNavigationProp } from '@react-navigation/native';
 import ThemedText from '../../components/ThemedText';
 import { useLogin } from '../../mutations/authMutations';
 import { useAuth } from '../../services/context/AuthContext';
+import { getBiometricEnabled } from '../../services/storage/appStorage';
+import { getLastLoginEmail, getAuthToken } from '../../services/storage/authStorage';
 
 type AuthNavigationProp = NativeStackNavigationProp<AuthStackParamList>;
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -20,8 +24,108 @@ const LoginScreen = () => {
   const navigation = useNavigation<NavigationProp>();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showBiometric, setShowBiometric] = useState(false);
+  const [isCheckingBiometric, setIsCheckingBiometric] = useState(true);
   const loginMutation = useLogin();
   const { checkAuth } = useAuth();
+
+  // Check if biometric login is available
+  useEffect(() => {
+    const checkBiometricAvailability = async () => {
+      try {
+        const biometricEnabled = await getBiometricEnabled();
+        const lastEmail = await getLastLoginEmail();
+        const hasToken = await getAuthToken();
+        
+        if (biometricEnabled && lastEmail) {
+          // Check if biometric hardware is available
+          const compatible = await LocalAuthentication.hasHardwareAsync();
+          const enrolled = await LocalAuthentication.isEnrolledAsync();
+          
+          if (compatible && enrolled) {
+            setShowBiometric(true);
+            setEmail(lastEmail);
+          }
+        }
+      } catch (error) {
+        console.error('Error checking biometric availability:', error);
+      } finally {
+        setIsCheckingBiometric(false);
+      }
+    };
+    
+    checkBiometricAvailability();
+  }, []);
+
+  // Handle biometric login
+  const handleBiometricLogin = async () => {
+    if (!email.trim()) {
+      Alert.alert('Error', 'No saved email found. Please login manually.');
+      return;
+    }
+
+    try {
+      // Check if token is still valid
+      const token = await getAuthToken();
+      if (token) {
+        const isAuthenticated = await checkAuth();
+        if (isAuthenticated) {
+          // Token is valid, navigate to main app
+          const parent = navigation.getParent();
+          if (parent) {
+            parent.navigate('Main');
+          } else {
+            navigation.navigate('Main');
+          }
+          return;
+        }
+      }
+
+      // Token invalid or expired, authenticate with biometric then prompt for password
+      const compatible = await LocalAuthentication.hasHardwareAsync();
+      if (!compatible) {
+        Alert.alert('Biometric Not Available', 'Biometric authentication is not available on this device.');
+        return;
+      }
+
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!enrolled) {
+        Alert.alert('Biometric Not Set Up', 'Please set up biometric authentication in your device settings first.');
+        return;
+      }
+
+      // Authenticate using biometrics
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Authenticate to login',
+        cancelLabel: 'Cancel',
+        disableDeviceFallback: false,
+      });
+
+      if (result.success) {
+        // Biometric successful, but still need password for security
+        Alert.alert(
+          'Enter Password',
+          'Please enter your password to complete login.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Focus password input - user will enter password and click login
+                // The email is already filled from stored value
+              },
+            },
+          ]
+        );
+      } else {
+        if (result.error !== 'user_cancel') {
+          Alert.alert('Authentication Failed', 'Biometric authentication failed. Please try again.');
+        }
+      }
+    } catch (error: any) {
+      console.error('Biometric login error:', error);
+      Alert.alert('Error', 'An error occurred during biometric authentication. Please try again.');
+    }
+  };
 
   const handleLogin = async () => {
     if (!email.trim()) {
@@ -302,6 +406,23 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   legalLink: {
+    color: '#42ac36',
+  },
+  biometricButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EFEFEF',
+    height: 60,
+    width: width - 40,
+    borderRadius: 15,
+    marginTop: 12,
+    gap: 12,
+  },
+  biometricButtonText: {
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 19,
     color: '#42ac36',
   },
 });

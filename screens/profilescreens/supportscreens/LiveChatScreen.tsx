@@ -10,6 +10,7 @@ import {
     StatusBar as RNStatusBar,
     ActivityIndicator,
     Alert,
+    RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,10 +28,26 @@ type ChatStatus = 'all' | 'pending' | 'resolved';
 const LiveChatScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const [selectedTab, setSelectedTab] = useState<ChatStatus>('all');
+    const [isRefreshing, setIsRefreshing] = useState(false);
 
     // Fetch chat sessions
     const { data: sessionsData, isLoading, isError, refetch } = useChatSessions(20);
-    const { data: activeSessionData } = useActiveChatSession();
+    const { data: activeSessionData, refetch: refetchActiveSession } = useActiveChatSession();
+
+    // Handle pull to refresh
+    const onRefresh = async () => {
+        setIsRefreshing(true);
+        try {
+            await Promise.all([
+                refetch(),
+                refetchActiveSession(),
+            ]);
+        } catch (error) {
+            console.error('Error refreshing data:', error);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
 
     const sessions = sessionsData?.data?.data || [];
     const activeSession = activeSessionData?.data;
@@ -133,6 +150,14 @@ const LiveChatScreen = () => {
                     style={styles.scrollView}
                     contentContainerStyle={styles.scrollContent}
                     showsVerticalScrollIndicator={false}
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={isRefreshing}
+                            onRefresh={onRefresh}
+                            tintColor="#42AC36"
+                            colors={['#42AC36']}
+                        />
+                    }
                 >
                     {/* New Chat Button */}
                     <TouchableOpacity

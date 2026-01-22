@@ -30,13 +30,14 @@ export const useSendChatMessage = () => {
       id: number;
       data: {
         message: string;
-        attachment?: File;
+        attachment?: any; // React Native file object: { uri: string, type: string, name: string }
       };
     }) => {
       const formData = new FormData();
       formData.append('message', data.message);
       if (data.attachment) {
-        formData.append('attachment', data.attachment);
+        // React Native FormData format
+        formData.append('attachment', data.attachment as any);
       }
       
       const response = await apiClient.post(CHAT_ROUTES.sendMessage(id), formData, {

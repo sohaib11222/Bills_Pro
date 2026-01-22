@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -45,6 +46,7 @@ const ChatDetailsScreen = () => {
     
     const [selectedIssue, setSelectedIssue] = useState<IssueType | null>(null);
     const [message, setMessage] = useState('');
+    const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
     // Fetch session if sessionId exists
     const { data: sessionData, isLoading: sessionLoading } = useChatSession(sessionId || 0);
@@ -158,17 +160,61 @@ const ChatDetailsScreen = () => {
         }
     };
 
+    const handleImagePicker = async () => {
+        try {
+            // Request permission
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert('Permission Denied', 'We need camera roll permissions to attach images.');
+                return;
+            }
+
+            // Launch image picker
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsEditing: true,
+                quality: 0.8,
+            });
+
+            if (!result.canceled && result.assets[0]) {
+                setSelectedImage(result.assets[0].uri);
+            }
+        } catch (error) {
+            console.error('Error picking image:', error);
+            Alert.alert('Error', 'Failed to pick image. Please try again.');
+        }
+    };
+
     const handleSendMessage = async () => {
-        if (message.trim() === '' || !currentSessionId) return;
+        if ((message.trim() === '' && !selectedImage) || !currentSessionId) return;
         
         const messageText = message.trim();
+        const imageToSend = selectedImage;
+        
+        // Clear inputs
         setMessage('');
+        setSelectedImage(null);
         
         try {
+            // Create file object for React Native FormData
+            let attachment: any = null;
+            if (imageToSend) {
+                const filename = imageToSend.split('/').pop() || 'image.jpg';
+                const match = /\.(\w+)$/.exec(filename);
+                const type = match ? `image/${match[1]}` : 'image/jpeg';
+                
+                attachment = {
+                    uri: imageToSend,
+                    type: type,
+                    name: filename,
+                } as any;
+            }
+            
             await sendMessageMutation.mutateAsync({
                 id: currentSessionId,
                 data: {
-                    message: messageText,
+                    message: messageText || 'Image',
+                    attachment: attachment,
                 },
             });
             
@@ -184,6 +230,7 @@ const ChatDetailsScreen = () => {
         } catch (error: any) {
             Alert.alert('Error', error.message || 'Failed to send message. Please try again.');
             setMessage(messageText); // Restore message on error
+            setSelectedImage(imageToSend); // Restore image on error
         }
     };
 
@@ -354,14 +401,24 @@ const ChatDetailsScreen = () => {
                                                 isUser ? styles.messageBubbleUser : styles.messageBubbleAdmin,
                                             ]}
                                         >
-                                            <ThemedText
-                                                style={[
-                                                    styles.messageText,
-                                                    isUser ? styles.messageTextUser : styles.messageTextAdmin,
-                                                ]}
-                                            >
-                                                {msg.message}
-                                            </ThemedText>
+                                            {msg.attachment && (
+                                                <Image
+                                                    source={{ uri: msg.attachment }}
+                                                    style={styles.messageImage}
+                                                    resizeMode="cover"
+                                                />
+                                            )}
+                                            {msg.message && (
+                                                <ThemedText
+                                                    style={[
+                                                        styles.messageText,
+                                                        isUser ? styles.messageTextUser : styles.messageTextAdmin,
+                                                        msg.attachment && styles.messageTextWithImage,
+                                                    ]}
+                                                >
+                                                    {msg.message}
+                                                </ThemedText>
+                                            )}
                                         </View>
                                         <ThemedText style={styles.messageTimestamp}>{timestamp}</ThemedText>
                                     </View>
@@ -381,9 +438,31 @@ const ChatDetailsScreen = () => {
                 </ScrollView>
             )}
 
+            {/* Image Preview */}
+            {selectedImage && (
+                <View style={styles.imagePreviewContainer}>
+                    <Image
+                        source={{ uri: selectedImage }}
+                        style={styles.imagePreview}
+                        resizeMode="cover"
+                    />
+                    <TouchableOpacity
+                        style={styles.removeImageButton}
+                        onPress={() => setSelectedImage(null)}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="close-circle" size={24} color="#EF4444" />
+                    </TouchableOpacity>
+                </View>
+            )}
+
             {/* Message Input Field */}
             <View style={styles.inputContainer}>
-                <TouchableOpacity style={styles.attachmentButton} activeOpacity={0.7}>
+                <TouchableOpacity 
+                    style={styles.attachmentButton} 
+                    activeOpacity={0.7}
+                    onPress={handleImagePicker}
+                >
                     <Image
                         source={require('../../../assets/Paperclip.png')}
                         style={styles.attachmentIcon}
@@ -402,13 +481,13 @@ const ChatDetailsScreen = () => {
                     style={styles.sendButton}
                     onPress={handleSendMessage}
                     activeOpacity={0.7}
-                    disabled={message.trim() === '' || !currentSessionId || sendMessageMutation.isPending}
+                    disabled={(message.trim() === '' && !selectedImage) || !currentSessionId || sendMessageMutation.isPending}
                 >
                     <Image
                         source={require('../../../assets/PaperPlaneRight.png')}
                         style={[
                             styles.sendIcon,
-                            message.trim() === '' && styles.sendIconDisabled,
+                            (message.trim() === '' && !selectedImage) && styles.sendIconDisabled,
                         ]}
                         resizeMode="contain"
                     />
@@ -535,9 +614,10 @@ const styles = StyleSheet.create({
     },
     messageBubble: {
         maxWidth: width * 0.7,
-        borderRadius: 100,
+        borderRadius: 12,
         padding: 14,
         marginBottom: 4,
+        overflow: 'hidden',
     },
     messageBubbleUser: {
         backgroundColor: '#42AC36',
@@ -652,6 +732,35 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '400',
         color: '#9CA3AF',
+    },
+    imagePreviewContainer: {
+        marginHorizontal: 20,
+        marginBottom: 12,
+        position: 'relative',
+    },
+    imagePreview: {
+        width: 150,
+        height: 150,
+        borderRadius: 12,
+        backgroundColor: '#F3F4F6',
+    },
+    removeImageButton: {
+        position: 'absolute',
+        top: -8,
+        right: -8,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+    },
+    messageImage: {
+        width: '100%',
+        maxWidth: width * 0.65,
+        height: 200,
+        borderRadius: 8,
+        marginBottom: 8,
+        backgroundColor: '#F3F4F6',
+    },
+    messageTextWithImage: {
+        marginTop: 0,
     },
 });
 

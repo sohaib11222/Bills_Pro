@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const ONBOARDING_SEEN_KEY = '@billspro_onboarding_seen';
 const PROFILE_IMAGE_KEY = '@billspro_profile_image';
+const BIOMETRIC_ENABLED_KEY = '@billspro_biometric_enabled';
 
 // Onboarding status
 export const getOnboardingSeen = async (): Promise<boolean> => {
@@ -45,5 +46,24 @@ export const removeProfileImage = async (): Promise<void> => {
     await AsyncStorage.removeItem(PROFILE_IMAGE_KEY);
   } catch (error) {
     console.error('Error removing profile image:', error);
+  }
+};
+
+// Biometric Login Storage
+export const getBiometricEnabled = async (): Promise<boolean> => {
+  try {
+    const enabled = await AsyncStorage.getItem(BIOMETRIC_ENABLED_KEY);
+    return enabled === 'true';
+  } catch (error) {
+    console.error('Error getting biometric status:', error);
+    return false;
+  }
+};
+
+export const setBiometricEnabled = async (enabled: boolean): Promise<void> => {
+  try {
+    await AsyncStorage.setItem(BIOMETRIC_ENABLED_KEY, enabled.toString());
+  } catch (error) {
+    console.error('Error setting biometric status:', error);
   }
 };

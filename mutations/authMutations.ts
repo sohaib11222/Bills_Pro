@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/api/apiClient';
 import { AUTH_ROUTES } from '../api.config';
-import { setAuthToken, setUserData, setPinStatus, clearAuthData } from '../services/storage/authStorage';
+import { setAuthToken, setUserData, setPinStatus, clearAuthData, setLastLoginEmail } from '../services/storage/authStorage';
 
 // Register
 export const useRegister = () => {
@@ -31,12 +31,14 @@ export const useLogin = () => {
       console.log('🟢 Login Mutation - Response:', JSON.stringify(response.data, null, 2));
       return response.data;
     },
-    onSuccess: async (data) => {
+    onSuccess: async (data, variables) => {
       if (data.success && data.data?.token) {
         await setAuthToken(data.data.token);
         if (data.data.user) {
           await setUserData(data.data.user);
         }
+        // Store email for biometric login
+        await setLastLoginEmail(variables.email);
         console.log('✅ Login Mutation - Token and user data saved');
         // Invalidate and refetch user-related queries
         queryClient.invalidateQueries({ queryKey: ['user'] });

@@ -15,6 +15,7 @@ import {
     ActivityIndicator,
     Alert,
     Clipboard,
+    RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -40,6 +41,7 @@ const WithdrawFundsScreen = () => {
     const [showSecurityModal, setShowSecurityModal] = useState(false);
     const [pin, setPin] = useState('');
     const [selectedAccount, setSelectedAccount] = useState<any>(null);
+    const [isRefreshing, setIsRefreshing] = useState(false);
 
     // Fetch data
     const { data: balanceData, isLoading: isLoadingBalance, refetch: refetchBalance } = useFiatWallets();
@@ -89,6 +91,21 @@ const WithdrawFundsScreen = () => {
     const handleQuickAmount = (amount: string) => {
         setSelectedQuickAmount(amount);
         setWithdrawAmount(amount.replace(/,/g, ''));
+    };
+
+    // Handle pull to refresh
+    const onRefresh = async () => {
+        setIsRefreshing(true);
+        try {
+            await Promise.all([
+                refetchBalance(),
+                refetchAccounts(),
+            ]);
+        } catch (error) {
+            console.error('Error refreshing data:', error);
+        } finally {
+            setIsRefreshing(false);
+        }
     };
 
     const handleSelectAccount = () => {
@@ -399,6 +416,14 @@ const WithdrawFundsScreen = () => {
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isRefreshing}
+                        onRefresh={onRefresh}
+                        tintColor="#42AC36"
+                        colors={['#42AC36']}
+                    />
+                }
             >
                 {/* Balance Card */}
                 <ImageBackground

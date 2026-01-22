@@ -10,6 +10,7 @@ import {
     Image,
     ActivityIndicator,
     Alert,
+    RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -29,12 +30,25 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const WithdrawalAccountsScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
+    const [isRefreshing, setIsRefreshing] = useState(false);
     
     const { data: accountsData, isLoading, isError, refetch } = useBankAccounts();
     const deleteAccountMutation = useDeleteBankAccount();
     const setDefaultMutation = useSetDefaultBankAccount();
     
     const accounts = accountsData?.data || [];
+
+    // Handle pull to refresh
+    const onRefresh = async () => {
+        setIsRefreshing(true);
+        try {
+            await refetch();
+        } catch (error) {
+            console.error('Error refreshing data:', error);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
 
     const handleDelete = (accountId: number) => {
         Alert.alert(
@@ -92,6 +106,14 @@ const WithdrawalAccountsScreen = () => {
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isRefreshing}
+                        onRefresh={onRefresh}
+                        tintColor="#42AC36"
+                        colors={['#42AC36']}
+                    />
+                }
             >
                 {isLoading ? (
                     <View style={styles.loadingContainer}>
