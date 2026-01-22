@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     StyleSheet,
@@ -10,6 +10,8 @@ import {
     Dimensions,
     Modal,
     Pressable,
+    ActivityIndicator,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,38 +19,61 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useBillPaymentProviders } from '../../queries/billPaymentQueries';
+import { useBillPaymentBeneficiaries } from '../../queries/billPaymentQueries';
+import { useInitiateBillPayment, useConfirmBillPayment, useCreateBeneficiary, useDeleteBeneficiary } from '../../mutations/billPaymentMutations';
+import { useFiatWallets } from '../../queries/walletQueries';
 
 const { width, height } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-const networks = [
-    { id: 'MTN', name: 'MTN', logoColor: '#FFD700', icon: require('../../assets/airtime.png') },
-    { id: 'GLO', name: 'GLO', logoColor: '#008000', icon: require('../../assets/datarecharge.png') },
-    { id: 'Airtel', name: 'Airtel', logoColor: '#FF0000', icon: require('../../assets/airtel.png') },
-    { id: '9mobile', name: '9mobile', logoColor: '#008000', icon: require('../../assets/9mobile.png') },
-];
+const CATEGORY_CODE = 'airtime';
 
-const recentNumbers = [
-    { id: '1', phoneNumber: '081134564789', network: 'MTN' },
-    { id: '2', phoneNumber: '081134564789', network: 'MTN' },
-    { id: '3', phoneNumber: '081134564789', network: 'MTN' },
-    { id: '4', phoneNumber: '081134564789', network: 'MTN' },
-    { id: '5', phoneNumber: '081134564789', network: 'MTN' },
-];
+// Network logo mapping - fallback if provider doesn't have logo
+const networkLogoMap: { [key: string]: any } = {
+    'mtn': require('../../assets/airtime.png'),
+    'glo': require('../../assets/datarecharge.png'),
+    'airtel': require('../../assets/airtel.png'),
+    '9mobile': require('../../assets/9mobile.png'),
+};
 
 const quickAmounts = ['2,000', '5,000', '10,000', '202,000'];
 
 const AirtimeRechargeScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const [amount, setAmount] = useState('');
-    const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
+    const [selectedProviderId, setSelectedProviderId] = useState<number | null>(null);
+    const [selectedProviderName, setSelectedProviderName] = useState<string | null>(null);
     const [phoneNumber, setPhoneNumber] = useState('');
     const [selectedQuickAmount, setSelectedQuickAmount] = useState<string | null>(null);
     const [showSummaryModal, setShowSummaryModal] = useState(false);
     const [showSecurityModal, setShowSecurityModal] = useState(false);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [pin, setPin] = useState('');
+    const [transactionId, setTransactionId] = useState<number | null>(null);
+    const [transactionReference, setTransactionReference] = useState<string | null>(null);
+    const [fee, setFee] = useState<number>(0);
+    const [totalAmount, setTotalAmount] = useState<number>(0);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [showSaveBeneficiaryModal, setShowSaveBeneficiaryModal] = useState(false);
+    const [showManageBeneficiariesModal, setShowManageBeneficiariesModal] = useState(false);
+    const [beneficiaryName, setBeneficiaryName] = useState('');
+
+    // API Hooks
+    const { data: providersData, isLoading: providersLoading } = useBillPaymentProviders(CATEGORY_CODE, 'NG');
+    const { data: beneficiariesData, isLoading: beneficiariesLoading } = useBillPaymentBeneficiaries();
+    const { data: walletsData, isLoading: walletsLoading } = useFiatWallets();
+    const initiateMutation = useInitiateBillPayment();
+    const confirmMutation = useConfirmBillPayment();
+    const createBeneficiaryMutation = useCreateBeneficiary();
+    const deleteBeneficiaryMutation = useDeleteBeneficiary();
+
+    const providers = providersData?.data || [];
+    const beneficiaries = beneficiariesData?.data || [];
+    const fiatWallets = walletsData?.data || [];
+    const ngnWallet = fiatWallets.find((w: any) => w.currency === 'NGN');
+    const balance = ngnWallet?.balance || 0;
 
     const handleQuickAmount = (amt: string) => {
         setSelectedQuickAmount(amt);
@@ -65,38 +90,199 @@ const AirtimeRechargeScreen = () => {
         setPin(pin.slice(0, -1));
     };
 
-    const handleProceed = () => {
-        if (amount && selectedNetwork && phoneNumber) {
-            setShowSummaryModal(true);
+    // Handle initiate payment
+    const handleProceed = async () => {
+        if (!amount || !selectedProviderId || !phoneNumber) {
+            Alert.alert('Error', 'Please fill in all fields');
+            return;
+        }
+
+        const amountValue = parseFloat(amount.replace(/,/g, ''));
+        if (isNaN(amountValue) || amountValue <= 0) {
+            Alert.alert('Error', 'Please enter a valid amount');
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const result = await initiateMutation.mutateAsync({
+                categoryCode: CATEGORY_CODE,
+                providerId: selectedProviderId,
+                amount: amountValue,
+                accountNumber: phoneNumber,
+                currency: 'NGN',
+            });
+
+            if (result.success && result.data) {
+                setTransactionId(result.data.transactionId);
+                setTransactionReference(result.data.reference);
+                setFee(result.data.fee || 0);
+                setTotalAmount(result.data.totalAmount || amountValue);
+                setShowSummaryModal(true);
+            } else {
+                Alert.alert('Error', result.message || 'Failed to initiate payment');
+            }
+        } catch (error: any) {
+            console.error('Initiate payment error:', error);
+            Alert.alert(
+                'Error',
+                error?.response?.data?.message || error?.message || 'Failed to initiate payment. Please try again.'
+            );
+        } finally {
+            setIsProcessing(false);
         }
     };
 
     const handleSummaryProceed = () => {
         setShowSummaryModal(false);
         setShowSecurityModal(true);
+        setPin(''); // Reset PIN
     };
 
-    const handleSecurityNext = () => {
-        if (pin.length === 4) {
-            setShowSecurityModal(false);
-            setShowSuccessModal(true);
+    // Handle confirm payment
+    const handleSecurityNext = async () => {
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a 4-digit PIN');
+            return;
         }
+
+        if (!transactionId) {
+            Alert.alert('Error', 'Transaction ID is missing');
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const result = await confirmMutation.mutateAsync({
+                transactionId: transactionId,
+                pin: pin,
+            });
+
+            if (result.success && result.data) {
+                setShowSecurityModal(false);
+                setShowSuccessModal(true);
+            } else {
+                Alert.alert('Error', result.message || 'Payment confirmation failed');
+                setPin(''); // Reset PIN on error
+            }
+        } catch (error: any) {
+            console.error('Confirm payment error:', error);
+            const errorMessage = error?.response?.data?.message || error?.message || 'Payment confirmation failed. Please try again.';
+            Alert.alert('Error', errorMessage);
+            setPin(''); // Reset PIN on error
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // Check if beneficiary already exists
+    const beneficiaryExists = beneficiaries.some((b: any) => 
+        b.provider_id === selectedProviderId && 
+        b.account_number === phoneNumber &&
+        b.category?.code === CATEGORY_CODE
+    );
+
+    // Handle save beneficiary
+    const handleSaveBeneficiary = async () => {
+        if (!selectedProviderId || !phoneNumber) {
+            Alert.alert('Error', 'Missing provider or phone number');
+            return;
+        }
+
+        if (beneficiaryExists) {
+            Alert.alert('Info', 'This beneficiary already exists');
+            setShowSaveBeneficiaryModal(false);
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const result = await createBeneficiaryMutation.mutateAsync({
+                categoryCode: CATEGORY_CODE,
+                providerId: selectedProviderId,
+                accountNumber: phoneNumber,
+                name: beneficiaryName || undefined,
+            });
+
+            if (result.success) {
+                Alert.alert('Success', 'Beneficiary saved successfully');
+                setShowSaveBeneficiaryModal(false);
+                setBeneficiaryName('');
+            } else {
+                Alert.alert('Error', result.message || 'Failed to save beneficiary');
+            }
+        } catch (error: any) {
+            console.error('Save beneficiary error:', error);
+            Alert.alert(
+                'Error',
+                error?.response?.data?.message || error?.message || 'Failed to save beneficiary. Please try again.'
+            );
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // Handle delete beneficiary
+    const handleDeleteBeneficiary = async (beneficiaryId: number) => {
+        Alert.alert(
+            'Delete Beneficiary',
+            'Are you sure you want to delete this beneficiary?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setIsProcessing(true);
+                        try {
+                            const result = await deleteBeneficiaryMutation.mutateAsync(beneficiaryId);
+                            if (result.success) {
+                                Alert.alert('Success', 'Beneficiary deleted successfully');
+                            } else {
+                                Alert.alert('Error', result.message || 'Failed to delete beneficiary');
+                            }
+                        } catch (error: any) {
+                            console.error('Delete beneficiary error:', error);
+                            Alert.alert(
+                                'Error',
+                                error?.response?.data?.message || error?.message || 'Failed to delete beneficiary. Please try again.'
+                            );
+                        } finally {
+                            setIsProcessing(false);
+                        }
+                    },
+                },
+            ]
+        );
     };
 
     const handleSuccessTransaction = () => {
         setShowSuccessModal(false);
+        // Reset form
+        setAmount('');
+        setSelectedProviderId(null);
+        setSelectedProviderName(null);
+        setPhoneNumber('');
+        setSelectedQuickAmount(null);
+        setPin('');
+        setTransactionId(null);
+        setTransactionReference(null);
+        setFee(0);
+        setTotalAmount(0);
+        setBeneficiaryName('');
+        
         navigation.navigate('TransactionHistory', {
             type: 'bill_payment',
             transactionData: {
                 type: 'Airtime Recharge',
-                billerType: selectedNetwork,
+                billerType: selectedProviderName,
                 phoneNumber: phoneNumber,
                 amount: amount,
-                fee: '200',
-                totalAmount: (parseFloat(amount.replace(/,/g, '')) + 200).toString(),
+                fee: fee.toString(),
+                totalAmount: totalAmount.toString(),
                 date: new Date().toLocaleString(),
                 status: 'Successful',
-                transactionId: '2348hf8283hfc92eni',
+                transactionId: transactionReference,
             },
         });
     };
@@ -139,40 +325,77 @@ const AirtimeRechargeScreen = () => {
                     <ThemedText style={styles.balanceLabel}>My Balance</ThemedText>
                     <View style={styles.balanceRow}>
                         <ThemedText style={styles.balanceCurrency}>₦</ThemedText>
-                        <ThemedText style={styles.balanceAmount}>10,000.00</ThemedText>
+                        {walletsLoading ? (
+                            <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                            <ThemedText style={styles.balanceAmount}>
+                                {balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </ThemedText>
+                        )}
                     </View>
                 </ImageBackground>
 
                 {/* Recent Section */}
                 <View style={styles.recentSection}>
-                    <ThemedText style={styles.sectionTitle}>Recent</ThemedText>
-                    <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={styles.recentScrollContent}
-                    >
-                        {recentNumbers.map((item) => (
-                            <TouchableOpacity
-                                key={item.id}
-                                style={styles.recentCard}
-                                onPress={() => {
-                                    setPhoneNumber(item.phoneNumber);
-                                    setSelectedNetwork(item.network);
-                                }}
-                                activeOpacity={0.8}
-                            >
-                                <View style={[styles.recentLogoContainer, { backgroundColor: '#FFD700' }]}>
-                                    <Image
-                                        source={require('../../assets/airtime.png')}
-                                        style={styles.recentLogoImage}
-                                        resizeMode="contain"
-                                    />
-                                </View>
-                                <ThemedText style={styles.recentPhoneNumber}>{item.phoneNumber}</ThemedText>
-                                <ThemedText style={styles.recentNetworkName}>{item.network}</ThemedText>
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
+                    <View style={styles.recentSectionHeader}>
+                        <ThemedText style={styles.sectionTitle}>Recent</ThemedText>
+                        <TouchableOpacity
+                            onPress={() => setShowManageBeneficiariesModal(true)}
+                            activeOpacity={0.8}
+                        >
+                            <ThemedText style={styles.manageButtonText}>Manage</ThemedText>
+                        </TouchableOpacity>
+                    </View>
+                    {beneficiariesLoading ? (
+                        <View style={styles.loadingContainer}>
+                            <ActivityIndicator size="small" color="#42AC36" />
+                        </View>
+                    ) : beneficiaries.filter((b: any) => b.category?.code === CATEGORY_CODE).length > 0 ? (
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.recentScrollContent}
+                        >
+                            {beneficiaries
+                                .filter((b: any) => b.category?.code === CATEGORY_CODE)
+                                .slice(0, 5)
+                                .map((beneficiary: any) => {
+                                    const provider = providers.find((p: any) => p.id === beneficiary.provider_id);
+                                    const providerCode = provider?.code?.toLowerCase() || 'mtn';
+                                    return (
+                                        <TouchableOpacity
+                                            key={beneficiary.id}
+                                            style={styles.recentCard}
+                                            onPress={() => {
+                                                setPhoneNumber(beneficiary.account_number || beneficiary.phone_number || '');
+                                                setSelectedProviderId(beneficiary.provider_id);
+                                                setSelectedProviderName(provider?.name || beneficiary.provider?.name || '');
+                                            }}
+                                            activeOpacity={0.8}
+                                        >
+                                            <View style={[styles.recentLogoContainer, { backgroundColor: '#FFD700' }]}>
+                                                <Image
+                                                    source={networkLogoMap[providerCode] || require('../../assets/airtime.png')}
+                                                    style={styles.recentLogoImage}
+                                                    resizeMode="contain"
+                                                />
+                                            </View>
+                                            <ThemedText style={styles.recentPhoneNumber}>
+                                                {beneficiary.account_number || beneficiary.phone_number || ''}
+                                            </ThemedText>
+                                            <ThemedText style={styles.recentNetworkName}>
+                                                {beneficiary.name || provider?.name || beneficiary.provider?.name || ''}
+                                            </ThemedText>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                        </ScrollView>
+                    ) : (
+                        <View style={styles.emptyBeneficiariesContainer}>
+                            <ThemedText style={styles.emptyBeneficiariesText}>No saved beneficiaries</ThemedText>
+                            <ThemedText style={styles.emptyBeneficiariesSubtext}>Save beneficiaries for faster payments</ThemedText>
+                        </View>
+                    )}
                 </View>
 
                 {/* Choose Amount Section */}
@@ -215,28 +438,46 @@ const AirtimeRechargeScreen = () => {
                 {/* Select Network Section */}
                 <View style={styles.networkSection}>
                     <ThemedText style={styles.sectionTitle}>Select network</ThemedText>
-                    <View style={styles.networkButtonsRow}>
-                        {networks.map((network) => (
-                            <TouchableOpacity
-                                key={network.id}
-                                style={[
-                                    styles.networkButton,
-                                    selectedNetwork === network.id && styles.networkButtonActive,
-                                ]}
-                                onPress={() => setSelectedNetwork(network.id)}
-                                activeOpacity={0.8}
-                            >
-                                <View style={[styles.networkLogoContainer, { backgroundColor: network.logoColor }]}>
-                                    <Image
-                                        source={network.icon}
-                                        style={styles.networkLogoImage}
-                                        resizeMode="contain"
-                                    />
-                                </View>
-                                <ThemedText style={styles.networkName}>{network.name}</ThemedText>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
+                    {providersLoading ? (
+                        <View style={styles.loadingContainer}>
+                            <ActivityIndicator size="small" color="#42AC36" />
+                            <ThemedText style={styles.loadingText}>Loading providers...</ThemedText>
+                        </View>
+                    ) : providers.length === 0 ? (
+                        <ThemedText style={styles.errorText}>No providers available</ThemedText>
+                    ) : (
+                        <View style={styles.networkButtonsRow}>
+                            {providers.map((provider: any) => {
+                                const providerCode = provider.code?.toLowerCase() || 'mtn';
+                                const logoColor = providerCode === 'mtn' ? '#FFD700' : 
+                                                 providerCode === 'glo' ? '#008000' :
+                                                 providerCode === 'airtel' ? '#FF0000' : '#008000';
+                                return (
+                                    <TouchableOpacity
+                                        key={provider.id}
+                                        style={[
+                                            styles.networkButton,
+                                            selectedProviderId === provider.id && styles.networkButtonActive,
+                                        ]}
+                                        onPress={() => {
+                                            setSelectedProviderId(provider.id);
+                                            setSelectedProviderName(provider.name);
+                                        }}
+                                        activeOpacity={0.8}
+                                    >
+                                        <View style={[styles.networkLogoContainer, { backgroundColor: logoColor }]}>
+                                            <Image
+                                                source={networkLogoMap[providerCode] || require('../../assets/airtime.png')}
+                                                style={styles.networkLogoImage}
+                                                resizeMode="contain"
+                                            />
+                                        </View>
+                                        <ThemedText style={styles.networkName}>{provider.name}</ThemedText>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+                    )}
                 </View>
 
                 {/* Phone Number Input */}
@@ -257,13 +498,17 @@ const AirtimeRechargeScreen = () => {
                 <TouchableOpacity
                     style={[
                         styles.proceedButton,
-                        (!amount || !selectedNetwork || !phoneNumber) && styles.proceedButtonDisabled,
+                        (!amount || !selectedProviderId || !phoneNumber || isProcessing) && styles.proceedButtonDisabled,
                     ]}
                     onPress={handleProceed}
-                    disabled={!amount || !selectedNetwork || !phoneNumber}
+                    disabled={!amount || !selectedProviderId || !phoneNumber || isProcessing}
                     activeOpacity={0.8}
                 >
-                    <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    {isProcessing ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                    ) : (
+                        <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    )}
                 </TouchableOpacity>
             </View>
 
@@ -313,17 +558,17 @@ const AirtimeRechargeScreen = () => {
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Fee:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>N200</ThemedText>
+                                <ThemedText style={styles.summaryValue}>N{formatAmount(fee.toString())}</ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Total Amount:</ThemedText>
                                 <ThemedText style={styles.summaryValue}>
-                                    N{formatAmount((parseFloat(amount.replace(/,/g, '')) + 200).toString())}
+                                    N{formatAmount(totalAmount.toString())}
                                 </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Network provider:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{selectedNetwork}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>{selectedProviderName || 'N/A'}</ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Phone Number:</ThemedText>
@@ -334,11 +579,19 @@ const AirtimeRechargeScreen = () => {
                         {/* Action Buttons */}
                         <View style={styles.summaryButtons}>
                             <TouchableOpacity
-                                style={styles.proceedSummaryButton}
+                                style={[
+                                    styles.proceedSummaryButton,
+                                    isProcessing && styles.proceedSummaryButtonDisabled,
+                                ]}
                                 onPress={handleSummaryProceed}
+                                disabled={isProcessing}
                                 activeOpacity={0.8}
                             >
-                                <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                {isProcessing ? (
+                                    <ActivityIndicator color="#FFFFFF" size="small" />
+                                ) : (
+                                    <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                )}
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.cancelButton}
@@ -478,13 +731,17 @@ const AirtimeRechargeScreen = () => {
                                 <TouchableOpacity
                                     style={[
                                         styles.nextButton,
-                                        pin.length !== 4 && styles.nextButtonDisabled,
+                                        (pin.length !== 4 || isProcessing) && styles.nextButtonDisabled,
                                     ]}
                                     onPress={handleSecurityNext}
-                                    disabled={pin.length !== 4}
+                                    disabled={pin.length !== 4 || isProcessing}
                                     activeOpacity={0.8}
                                 >
-                                    <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                                    {isProcessing ? (
+                                        <ActivityIndicator color="#FFFFFF" size="small" />
+                                    ) : (
+                                        <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                                    )}
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -522,6 +779,19 @@ const AirtimeRechargeScreen = () => {
                             You have successfully completed an airtime recharge of{' '}
                             <ThemedText style={styles.successAmount}>N{formatAmount(amount)}</ThemedText>
                         </ThemedText>
+                        {!beneficiaryExists && selectedProviderId && phoneNumber && (
+                            <TouchableOpacity
+                                style={styles.saveBeneficiaryButton}
+                                onPress={() => {
+                                    setShowSuccessModal(false);
+                                    setShowSaveBeneficiaryModal(true);
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="bookmark-outline" size={16} color="#42AC36" />
+                                <ThemedText style={styles.saveBeneficiaryButtonText}>Save as Beneficiary</ThemedText>
+                            </TouchableOpacity>
+                        )}
                         <View style={styles.successButtons}>
                             <TouchableOpacity
                                 style={styles.transactionButton}
@@ -538,6 +808,159 @@ const AirtimeRechargeScreen = () => {
                                 <ThemedText style={styles.closeSuccessButtonText}>Close</ThemedText>
                             </TouchableOpacity>
                         </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* Save Beneficiary Modal */}
+            <Modal
+                visible={showSaveBeneficiaryModal}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setShowSaveBeneficiaryModal(false)}
+            >
+                <Pressable
+                    style={styles.beneficiaryModalOverlay}
+                    onPress={() => setShowSaveBeneficiaryModal(false)}
+                >
+                    <Pressable style={styles.beneficiaryModalContent} onPress={(e) => e.stopPropagation()}>
+                        <View style={styles.beneficiaryModalHeader}>
+                            <ThemedText style={styles.beneficiaryModalTitle}>Save as Beneficiary</ThemedText>
+                            <TouchableOpacity
+                                style={styles.beneficiaryModalCloseButton}
+                                onPress={() => {
+                                    setShowSaveBeneficiaryModal(false);
+                                    setBeneficiaryName('');
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="close" size={24} color="#000000" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.beneficiaryForm}>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Phone Number</ThemedText>
+                                <ThemedText style={styles.beneficiaryValue}>{phoneNumber}</ThemedText>
+                            </View>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Network</ThemedText>
+                                <ThemedText style={styles.beneficiaryValue}>{selectedProviderName}</ThemedText>
+                            </View>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Name (Optional)</ThemedText>
+                                <TextInput
+                                    style={styles.beneficiaryNameInput}
+                                    placeholder="e.g., My Phone, Home"
+                                    placeholderTextColor="#9CA3AF"
+                                    value={beneficiaryName}
+                                    onChangeText={setBeneficiaryName}
+                                />
+                            </View>
+                        </View>
+
+                        <View style={styles.beneficiaryModalButtons}>
+                            <TouchableOpacity
+                                style={[
+                                    styles.saveBeneficiaryConfirmButton,
+                                    isProcessing && styles.saveBeneficiaryConfirmButtonDisabled,
+                                ]}
+                                onPress={handleSaveBeneficiary}
+                                disabled={isProcessing}
+                                activeOpacity={0.8}
+                            >
+                                {isProcessing ? (
+                                    <ActivityIndicator color="#FFFFFF" size="small" />
+                                ) : (
+                                    <ThemedText style={styles.saveBeneficiaryConfirmButtonText}>Save</ThemedText>
+                                )}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.cancelBeneficiaryButton}
+                                onPress={() => {
+                                    setShowSaveBeneficiaryModal(false);
+                                    setBeneficiaryName('');
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <ThemedText style={styles.cancelBeneficiaryButtonText}>Cancel</ThemedText>
+                            </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* Manage Beneficiaries Modal */}
+            <Modal
+                visible={showManageBeneficiariesModal}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setShowManageBeneficiariesModal(false)}
+            >
+                <Pressable
+                    style={styles.beneficiaryModalOverlay}
+                    onPress={() => setShowManageBeneficiariesModal(false)}
+                >
+                    <Pressable style={styles.beneficiaryModalContent} onPress={(e) => e.stopPropagation()}>
+                        <View style={styles.beneficiaryModalHeader}>
+                            <ThemedText style={styles.beneficiaryModalTitle}>Manage Beneficiaries</ThemedText>
+                            <TouchableOpacity
+                                style={styles.beneficiaryModalCloseButton}
+                                onPress={() => setShowManageBeneficiariesModal(false)}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="close" size={24} color="#000000" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView
+                            style={styles.beneficiariesList}
+                            showsVerticalScrollIndicator={false}
+                            contentContainerStyle={styles.beneficiariesListContent}
+                        >
+                            {beneficiariesLoading ? (
+                                <View style={styles.beneficiariesLoadingContainer}>
+                                    <ActivityIndicator size="small" color="#42AC36" />
+                                    <ThemedText style={styles.beneficiariesLoadingText}>Loading...</ThemedText>
+                                </View>
+                            ) : beneficiaries.filter((b: any) => b.category?.code === CATEGORY_CODE).length > 0 ? (
+                                beneficiaries
+                                    .filter((b: any) => b.category?.code === CATEGORY_CODE)
+                                    .map((beneficiary: any) => {
+                                        const provider = providers.find((p: any) => p.id === beneficiary.provider_id);
+                                        return (
+                                            <View key={beneficiary.id} style={styles.beneficiaryListItem}>
+                                                <View style={styles.beneficiaryListItemContent}>
+                                                    <ThemedText style={styles.beneficiaryListItemName}>
+                                                        {beneficiary.name || 'Unnamed'}
+                                                    </ThemedText>
+                                                    <ThemedText style={styles.beneficiaryListItemNumber}>
+                                                        {beneficiary.account_number}
+                                                    </ThemedText>
+                                                    <ThemedText style={styles.beneficiaryListItemProvider}>
+                                                        {provider?.name || beneficiary.provider?.name || ''}
+                                                    </ThemedText>
+                                                </View>
+                                                <TouchableOpacity
+                                                    style={styles.deleteBeneficiaryButton}
+                                                    onPress={() => handleDeleteBeneficiary(beneficiary.id)}
+                                                    disabled={isProcessing}
+                                                    activeOpacity={0.8}
+                                                >
+                                                    <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                                                </TouchableOpacity>
+                                            </View>
+                                        );
+                                    })
+                            ) : (
+                                <View style={styles.emptyBeneficiariesModalContainer}>
+                                    <ThemedText style={styles.emptyBeneficiariesModalText}>No beneficiaries saved</ThemedText>
+                                    <ThemedText style={styles.emptyBeneficiariesModalSubtext}>
+                                        Save beneficiaries after successful payments for faster checkout
+                                    </ThemedText>
+                                </View>
+                            )}
+                        </ScrollView>
                     </Pressable>
                 </Pressable>
             </Modal>
@@ -1159,6 +1582,229 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '400',
         color: '#6B7280',
+    },
+    saveBeneficiaryButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#F0FDF4',
+        borderWidth: 1,
+        borderColor: '#42AC36',
+        borderRadius: 12,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        marginBottom: 16,
+        gap: 8,
+    },
+    saveBeneficiaryButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#42AC36',
+    },
+    recentSectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    manageButtonText: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#42AC36',
+    },
+    emptyBeneficiariesContainer: {
+        padding: 20,
+        alignItems: 'center',
+    },
+    emptyBeneficiariesText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#6B7280',
+        marginBottom: 4,
+    },
+    emptyBeneficiariesSubtext: {
+        fontSize: 12,
+        color: '#9CA3AF',
+    },
+    beneficiaryModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'flex-end',
+    },
+    beneficiaryModalContent: {
+        backgroundColor: '#FFFFFF',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        paddingTop: 20,
+        paddingBottom: 32,
+        paddingHorizontal: 20,
+        maxHeight: height * 0.9,
+        width: '100%',
+    },
+    beneficiaryModalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 20,
+        position: 'relative',
+    },
+    beneficiaryModalTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#000000',
+        textAlign: 'center',
+    },
+    beneficiaryModalCloseButton: {
+        position: 'absolute',
+        right: 0,
+        top: 0,
+        bottom: 0,
+        justifyContent: 'center',
+    },
+    beneficiaryForm: {
+        marginBottom: 24,
+    },
+    beneficiaryInputContainer: {
+        marginBottom: 16,
+    },
+    beneficiaryLabel: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#6B7280',
+        marginBottom: 8,
+    },
+    beneficiaryValue: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#111827',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        padding: 12,
+    },
+    beneficiaryNameInput: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#111827',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    beneficiaryModalButtons: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    saveBeneficiaryConfirmButton: {
+        flex: 1,
+        backgroundColor: '#42AC36',
+        borderRadius: 12,
+        paddingVertical: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    saveBeneficiaryConfirmButtonDisabled: {
+        opacity: 0.6,
+    },
+    saveBeneficiaryConfirmButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#FFFFFF',
+    },
+    cancelBeneficiaryButton: {
+        flex: 1,
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        paddingVertical: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    cancelBeneficiaryButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#6B7280',
+    },
+    beneficiariesList: {
+        maxHeight: 400,
+    },
+    beneficiariesListContent: {
+        paddingBottom: 10,
+    },
+    beneficiariesLoadingContainer: {
+        padding: 40,
+        alignItems: 'center',
+        gap: 12,
+    },
+    beneficiariesLoadingText: {
+        fontSize: 14,
+        color: '#6B7280',
+    },
+    beneficiaryListItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 15,
+        padding: 16,
+        marginBottom: 12,
+    },
+    beneficiaryListItemContent: {
+        flex: 1,
+    },
+    beneficiaryListItemName: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#111827',
+        marginBottom: 4,
+    },
+    beneficiaryListItemNumber: {
+        fontSize: 12,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginBottom: 2,
+    },
+    beneficiaryListItemProvider: {
+        fontSize: 11,
+        fontWeight: '400',
+        color: '#9CA3AF',
+    },
+    deleteBeneficiaryButton: {
+        padding: 8,
+    },
+    emptyBeneficiariesModalContainer: {
+        padding: 40,
+        alignItems: 'center',
+    },
+    emptyBeneficiariesModalText: {
+        fontSize: 16,
+        fontWeight: '500',
+        color: '#6B7280',
+        marginBottom: 8,
+    },
+    emptyBeneficiariesModalSubtext: {
+        fontSize: 14,
+        color: '#9CA3AF',
+        textAlign: 'center',
+    },
+    loadingContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+        gap: 10,
+    },
+    loadingText: {
+        fontSize: 14,
+        color: '#6B7280',
+    },
+    errorText: {
+        fontSize: 14,
+        color: '#EF4444',
+        textAlign: 'center',
+        padding: 20,
+    },
+    proceedSummaryButtonDisabled: {
+        opacity: 0.6,
     },
 });
 

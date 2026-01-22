@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -9,13 +9,19 @@ import {
     Platform,
     StatusBar as RNStatusBar,
     Image,
+    Alert,
+    ActivityIndicator,
+    KeyboardAvoidingView,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useKyc } from '../../queries/kycQueries';
+import { useSubmitKyc } from '../../mutations/kycMutations';
+import { useUserProfile } from '../../queries/userQueries';
 
 const { width } = Dimensions.get('window');
 
@@ -23,8 +29,17 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const VerificationScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
-    const [isVerified, setIsVerified] = useState(false);
-    const [showPassword, setShowPassword] = useState(false);
+    const { data: kycData, isLoading: isLoadingKyc, refetch: refetchKyc } = useKyc();
+    const { data: userData } = useUserProfile();
+    const submitKycMutation = useSubmitKyc();
+    
+    const kyc = kycData?.data?.kyc;
+    const user = userData?.data?.user;
+    
+    // Determine verification status
+    const isVerified = kyc?.status === 'approved';
+    const isPending = kyc?.status === 'pending';
+    const isRejected = kyc?.status === 'rejected';
     
     // Form state
     const [firstName, setFirstName] = useState('');
@@ -33,19 +48,56 @@ const VerificationScreen = () => {
     const [dateOfBirth, setDateOfBirth] = useState('');
     const [bvnNumber, setBvnNumber] = useState('');
     const [ninNumber, setNinNumber] = useState('');
-    const [password, setPassword] = useState('');
 
-    // Verified state values
-    const verifiedData = {
-        firstName: 'Abdul malik',
-        lastName: 'Qamardeen',
-        email: 'qamardeenabdulmalik@gmail.com',
-        dateOfBirth: '01-01-2024',
-        bvnNumber: '123456789',
-        ninNumber: '123456789',
+    // Load KYC data or user profile data into form
+    useEffect(() => {
+        if (kyc) {
+            // Pre-populate with existing KYC data
+            setFirstName(kyc.first_name || '');
+            setLastName(kyc.last_name || '');
+            setEmail(kyc.email || '');
+            setDateOfBirth(kyc.date_of_birth ? formatDateForInput(kyc.date_of_birth) : '');
+            setBvnNumber(kyc.bvn_number || '');
+            setNinNumber(kyc.nin_number || '');
+        } else if (user) {
+            // Pre-populate with user profile data
+            setFirstName(user.first_name || '');
+            setLastName(user.last_name || '');
+            setEmail(user.email || '');
+        }
+    }, [kyc, user]);
+
+    // Refetch KYC data when screen comes into focus
+    useFocusEffect(
+        React.useCallback(() => {
+            refetchKyc();
+        }, [refetchKyc])
+    );
+
+    // Format date from API (YYYY-MM-DD) to display format (DD-MM-YYYY)
+    const formatDateForInput = (dateString: string) => {
+        if (!dateString) return '';
+        const date = new Date(dateString);
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        return `${day}-${month}-${year}`;
     };
 
-    // Check if all fields are filled
+    // Format date from input (DD-MM-YYYY) to API format (YYYY-MM-DD)
+    const formatDateForAPI = (dateString: string) => {
+        if (!dateString) return '';
+        // Try to parse DD-MM-YYYY format
+        const parts = dateString.split('-');
+        if (parts.length === 3) {
+            const [day, month, year] = parts;
+            return `${year}-${month}-${day}`;
+        }
+        // If already in YYYY-MM-DD format, return as is
+        return dateString;
+    };
+
+    // Check if all required fields are filled
     const isFormValid = () => {
         if (isVerified) return true;
         return (
@@ -54,29 +106,77 @@ const VerificationScreen = () => {
             email.trim() !== '' &&
             dateOfBirth.trim() !== '' &&
             bvnNumber.trim() !== '' &&
-            ninNumber.trim() !== '' &&
-            password.trim() !== ''
+            ninNumber.trim() !== ''
         );
     };
 
-    const handleProceed = () => {
-        if (!isVerified) {
-            // Validate and submit, then set verified
-            setIsVerified(true);
-            setFirstName(verifiedData.firstName);
-            setLastName(verifiedData.lastName);
-            setEmail(verifiedData.email);
-            setDateOfBirth(verifiedData.dateOfBirth);
-            setBvnNumber(verifiedData.bvnNumber);
-            setNinNumber(verifiedData.ninNumber);
-        } else {
-            // Already verified, can navigate back or do something else
+    const handleProceed = async () => {
+        if (isVerified) {
+            // Already verified, navigate back
             navigation.goBack();
+            return;
+        }
+
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email.trim())) {
+            Alert.alert('Validation Error', 'Please enter a valid email address');
+            return;
+        }
+
+        // Validate date format
+        const dateRegex = /^\d{2}-\d{2}-\d{4}$/;
+        if (!dateRegex.test(dateOfBirth.trim())) {
+            Alert.alert('Validation Error', 'Please enter date of birth in DD-MM-YYYY format');
+            return;
+        }
+
+        try {
+            const kycData = {
+                first_name: firstName.trim(),
+                last_name: lastName.trim(),
+                email: email.trim(),
+                date_of_birth: formatDateForAPI(dateOfBirth.trim()),
+                bvn_number: bvnNumber.trim(),
+                nin_number: ninNumber.trim(),
+            };
+
+            const result = await submitKycMutation.mutateAsync(kycData);
+
+            if (result.success) {
+                Alert.alert('Success', 'KYC information submitted successfully. Your verification is pending review.', [
+                    { text: 'OK', onPress: () => {
+                        refetchKyc();
+                    }}
+                ]);
+            } else {
+                Alert.alert('Error', result.message || 'Failed to submit KYC information. Please try again.');
+            }
+        } catch (error: any) {
+            console.error('KYC submission error:', error);
+            const errorMessage = error?.response?.data?.message || 
+                                error?.response?.data?.errors ? 
+                                Object.values(error.response.data.errors).flat().join('\n') :
+                                error?.message || 
+                                'Failed to submit KYC information. Please try again.';
+            Alert.alert('Error', errorMessage);
         }
     };
 
+    if (isLoadingKyc) {
+        return (
+            <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+                <ActivityIndicator size="large" color="#42AC36" />
+            </View>
+        );
+    }
+
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView
+            style={styles.container}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
             <StatusBar style="dark" />
             
             {/* Header */}
@@ -96,6 +196,7 @@ const VerificationScreen = () => {
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
             >
                 {/* Information Banner */}
                 {isVerified ? (
@@ -108,6 +209,20 @@ const VerificationScreen = () => {
                                 resizeMode="contain"
                             />
                         </View>
+                    </View>
+                ) : isPending ? (
+                    <View style={styles.pendingBanner}>
+                        <ThemedText style={styles.pendingBannerTitle}>Verification Pending</ThemedText>
+                        <ThemedText style={styles.pendingBannerSubtitle}>
+                            Your KYC submission is under review. Please wait for approval.
+                        </ThemedText>
+                    </View>
+                ) : isRejected ? (
+                    <View style={styles.rejectedBanner}>
+                        <ThemedText style={styles.rejectedBannerTitle}>Verification Rejected</ThemedText>
+                        <ThemedText style={styles.rejectedBannerSubtitle}>
+                            {kyc?.rejection_reason || 'Your KYC submission was rejected. Please update your information and try again.'}
+                        </ThemedText>
                     </View>
                 ) : (
                     <View style={styles.incompleteBanner}>
@@ -160,9 +275,11 @@ const VerificationScreen = () => {
                             style={styles.input}
                             value={dateOfBirth}
                             onChangeText={setDateOfBirth}
-                            placeholder="Date of birth"
+                            placeholder="Date of birth (DD-MM-YYYY)"
                             placeholderTextColor="#9CA3AF"
                             editable={!isVerified}
+                            keyboardType="numeric"
+                            maxLength={10}
                         />
                         <TouchableOpacity
                             style={styles.inputIcon}
@@ -196,55 +313,37 @@ const VerificationScreen = () => {
                             editable={!isVerified}
                         />
                     </View>
-
-                    {!isVerified && (
-                        <View style={styles.inputContainer}>
-                            <TextInput
-                                style={styles.input}
-                                value={password}
-                                onChangeText={setPassword}
-                                placeholder="Password"
-                                placeholderTextColor="#9CA3AF"
-                                secureTextEntry={!showPassword}
-                            />
-                            <TouchableOpacity
-                                style={styles.inputIcon}
-                                activeOpacity={0.7}
-                                onPress={() => setShowPassword(!showPassword)}
-                            >
-                                <Ionicons
-                                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                                    size={20}
-                                    color="#9CA3AF"
-                                />
-                            </TouchableOpacity>
-                        </View>
-                    )}
                 </View>
             </ScrollView>
 
             {/* Proceed Button */}
-            <View style={styles.buttonContainer}>
-                <TouchableOpacity
-                    style={[
-                        styles.proceedButton,
-                        !isFormValid() && styles.proceedButtonDisabled,
-                    ]}
-                    activeOpacity={0.8}
-                    onPress={handleProceed}
-                    disabled={!isFormValid()}
-                >
-                    <ThemedText
+            {!isVerified && (
+                <View style={styles.buttonContainer}>
+                    <TouchableOpacity
                         style={[
-                            styles.proceedButtonText,
-                            !isFormValid() && styles.proceedButtonTextDisabled,
+                            styles.proceedButton,
+                            (!isFormValid() || submitKycMutation.isPending) && styles.proceedButtonDisabled,
                         ]}
+                        activeOpacity={0.8}
+                        onPress={handleProceed}
+                        disabled={!isFormValid() || submitKycMutation.isPending}
                     >
-                        Proceed
-                    </ThemedText>
-                </TouchableOpacity>
-            </View>
-        </View>
+                        {submitKycMutation.isPending ? (
+                            <ActivityIndicator color="#FFFFFF" />
+                        ) : (
+                            <ThemedText
+                                style={[
+                                    styles.proceedButtonText,
+                                    (!isFormValid() || submitKycMutation.isPending) && styles.proceedButtonTextDisabled,
+                                ]}
+                            >
+                                {isPending ? 'Update KYC' : 'Submit KYC'}
+                            </ThemedText>
+                        )}
+                    </TouchableOpacity>
+                </View>
+            )}
+        </KeyboardAvoidingView>
     );
 };
 
@@ -304,6 +403,46 @@ const styles = StyleSheet.create({
         fontSize: 8,
         fontWeight: '400',
         color: '#6B7280',
+    },
+    pendingBanner: {
+        backgroundColor: '#FEF3C7',
+        borderRadius: 15,
+        padding: 14,
+        marginHorizontal: 20,
+        marginBottom: 24,
+        borderWidth: 0.5,
+        borderColor: '#F59E0B',
+    },
+    pendingBannerTitle: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#92400E',
+        marginBottom: 4,
+    },
+    pendingBannerSubtitle: {
+        fontSize: 8,
+        fontWeight: '400',
+        color: '#92400E',
+    },
+    rejectedBanner: {
+        backgroundColor: '#FEE2E2',
+        borderRadius: 15,
+        padding: 14,
+        marginHorizontal: 20,
+        marginBottom: 24,
+        borderWidth: 0.5,
+        borderColor: '#DC2626',
+    },
+    rejectedBannerTitle: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#991B1B',
+        marginBottom: 4,
+    },
+    rejectedBannerSubtitle: {
+        fontSize: 8,
+        fontWeight: '400',
+        color: '#991B1B',
     },
     verifiedBanner: {
         backgroundColor: '#008000',

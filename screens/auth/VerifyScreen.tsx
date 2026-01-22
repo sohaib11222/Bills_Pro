@@ -1,21 +1,30 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Alert, ActivityIndicator } from 'react-native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useVerifyEmailOtp, useResendOtp } from '../../mutations/authMutations';
+import { useAuth } from '../../services/context/AuthContext';
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList>;
+type VerifyScreenRouteProp = RouteProp<AuthStackParamList, 'Verify'>;
 
 const { width, height } = Dimensions.get('window');
 
 const VerifyScreen = () => {
   const navigation = useNavigation<NavigationProp>();
+  const route = useRoute<VerifyScreenRouteProp>();
+  const email = route.params?.email || '';
   const [code, setCode] = useState(['', '', '', '', '']);
   const [timeLeft, setTimeLeft] = useState(59);
+  const [isResending, setIsResending] = useState(false);
   const inputRefs = useRef<(TextInput | null)[]>([]);
+  const verifyMutation = useVerifyEmailOtp();
+  const resendMutation = useResendOtp();
+  const { checkAuth } = useAuth();
 
   useEffect(() => {
     if (timeLeft > 0) {
@@ -23,6 +32,47 @@ const VerifyScreen = () => {
       return () => clearTimeout(timer);
     }
   }, [timeLeft]);
+
+  const handleVerify = async () => {
+    const otp = code.join('');
+    
+    if (otp.length !== 5) {
+      Alert.alert('Error', 'Please enter the complete 5-digit code');
+      return;
+    }
+
+    if (!email) {
+      Alert.alert('Error', 'Email address is required');
+      return;
+    }
+
+    try {
+      const result = await verifyMutation.mutateAsync({
+        email: email,
+        otp: otp,
+      });
+
+      if (result.success) {
+        // Refresh auth state
+        await checkAuth();
+        // Navigate to KYC screen after successful verification
+        navigation.navigate('KYC');
+      } else {
+        Alert.alert('Verification Failed', result.message || 'Invalid OTP. Please try again.');
+        // Clear the code on error
+        setCode(['', '', '', '', '']);
+        inputRefs.current[0]?.focus();
+      }
+    } catch (error: any) {
+      Alert.alert(
+        'Verification Failed',
+        error?.message || error?.data?.message || 'Invalid or expired OTP. Please try again.'
+      );
+      // Clear the code on error
+      setCode(['', '', '', '', '']);
+      inputRefs.current[0]?.focus();
+    }
+  };
 
   const handleCodeChange = (text: string, index: number) => {
     const newCode = [...code];
@@ -38,6 +88,44 @@ const VerifyScreen = () => {
   const handleKeyPress = (key: string, index: number) => {
     if (key === 'Backspace' && !code[index] && index > 0) {
       inputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (timeLeft > 0) {
+      Alert.alert('Please Wait', `You can resend code in ${timeLeft} seconds`);
+      return;
+    }
+
+    if (!email) {
+      Alert.alert('Error', 'Email address is required');
+      return;
+    }
+
+    setIsResending(true);
+    try {
+      const result = await resendMutation.mutateAsync({
+        email: email,
+        type: 'email',
+      });
+
+      if (result.success) {
+        Alert.alert('Success', 'OTP has been resent to your email');
+        // Reset timer
+        setTimeLeft(59);
+        // Clear code
+        setCode(['', '', '', '', '']);
+        inputRefs.current[0]?.focus();
+      } else {
+        Alert.alert('Error', result.message || 'Failed to resend OTP. Please try again.');
+      }
+    } catch (error: any) {
+      Alert.alert(
+        'Error',
+        error?.message || error?.data?.message || 'Failed to resend OTP. Please try again.'
+      );
+    } finally {
+      setIsResending(false);
     }
   };
 
@@ -67,7 +155,9 @@ const VerifyScreen = () => {
         <ThemedText weight='semibold' style={styles.title}>Verify</ThemedText>
         
         {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>A 5-digit code has been sent to your email</ThemedText>
+        <ThemedText style={styles.subtitle}>
+          A 5-digit code has been sent to {email ? email : 'your email'}
+        </ThemedText>
 
         {/* Code Input Fields */}
         <View style={styles.codeContainer}>
@@ -88,18 +178,37 @@ const VerifyScreen = () => {
           ))}
         </View>
 
-        {/* Resend Timer */}
-        <ThemedText style={styles.resendText}>
-          You can resend code in{' '}
-          <ThemedText style={styles.timerText}>00:{String(timeLeft).padStart(2, '0')} sec</ThemedText>
-        </ThemedText>
+        {/* Resend Timer/Button */}
+        {timeLeft > 0 ? (
+          <ThemedText style={styles.resendText}>
+            You can resend code in{' '}
+            <ThemedText style={styles.timerText}>00:{String(timeLeft).padStart(2, '0')} sec</ThemedText>
+          </ThemedText>
+        ) : (
+          <TouchableOpacity 
+            onPress={handleResendOtp}
+            disabled={isResending || resendMutation.isPending}
+            style={styles.resendButton}
+          >
+            {isResending || resendMutation.isPending ? (
+              <ActivityIndicator size="small" color="#42ac36" />
+            ) : (
+              <ThemedText style={styles.resendButtonText}>Resend Code</ThemedText>
+            )}
+          </TouchableOpacity>
+        )}
 
         {/* Proceed Button */}
         <TouchableOpacity 
-          style={styles.proceedButton}
-          onPress={() => navigation.navigate('KYC')}
+          style={[styles.proceedButton, verifyMutation.isPending && styles.proceedButtonDisabled]}
+          onPress={handleVerify}
+          disabled={verifyMutation.isPending || code.join('').length !== 5}
         >
-          <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+          {verifyMutation.isPending ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <ThemedText style={styles.proceedButtonText}>Verify</ThemedText>
+          )}
         </TouchableOpacity>
       </View>
     </View>
@@ -203,6 +312,19 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  proceedButtonDisabled: {
+    opacity: 0.6,
+  },
+  resendButton: {
+    marginBottom: 22,
+    alignItems: 'center',
+  },
+  resendButtonText: {
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 19,
+    color: '#42ac36',
   },
 });
 

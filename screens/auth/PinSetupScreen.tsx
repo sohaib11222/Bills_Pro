@@ -168,8 +168,9 @@ const PinSetupScreen = () => {
               <Ionicons name="backspace-outline" size={24} color="#000000" />
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.nextButton}
+              style={[styles.nextButton, pin.length !== 4 && styles.nextButtonDisabled]}
               onPress={handleNext}
+              disabled={pin.length !== 4}
             >
               <ThemedText style={styles.nextButtonText}>Next</ThemedText>
             </TouchableOpacity>
@@ -340,6 +341,9 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  nextButtonDisabled: {
+    opacity: 0.6,
   },
 });
 

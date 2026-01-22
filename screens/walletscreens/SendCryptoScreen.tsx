@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -10,40 +10,40 @@ import {
     Dimensions,
     Modal,
     Pressable,
+    Alert,
+    ActivityIndicator,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useSendCrypto } from '../../mutations/cryptoMutations';
+import { useUsdtBlockchains } from '../../queries/cryptoQueries';
 
 const { width } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type SendCryptoRouteProp = RouteProp<RootStackParamList, 'SendCrypto'>;
 
-const networks = [
-    { id: 'BTC', name: 'BTC (Bitcoin)', creditingTime: '1 min' },
-    { id: 'LIGHTNING', name: 'LIGHTNING (Lightning Network)', creditingTime: '1 min' },
-    { id: 'BEP20', name: 'BEP20 (Binance Smart Chain)', creditingTime: '1 min' },
-];
-
 const SendCryptoScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const route = useRoute<SendCryptoRouteProp>();
-    const { cryptoType, balance, usdValue, icon, iconBackground } = route.params || {
+    const { cryptoType, balance, usdValue, icon, iconBackground, blockchain } = route.params || {
         cryptoType: 'BTC',
         balance: '0.00023',
         usdValue: '$20,000',
         icon: require('../../assets/popular1.png'),
         iconBackground: '#FFA5004D',
+        blockchain: 'BTC',
     };
 
-    const [amount, setAmount] = useState('200');
-    const [currencyType, setCurrencyType] = useState<'BTC' | 'USD'>('USD');
+    const [amount, setAmount] = useState('');
     const [withdrawalAddress, setWithdrawalAddress] = useState('');
-    const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
+    const [selectedNetwork, setSelectedNetwork] = useState<string | null>(blockchain || null);
+    const [selectedNetworkId, setSelectedNetworkId] = useState<string | null>(blockchain || null);
     const [showNetworkModal, setShowNetworkModal] = useState(false);
     const [showSummaryModal, setShowSummaryModal] = useState(false);
     const [show2FASetupModal, setShow2FASetupModal] = useState(false);
@@ -52,52 +52,215 @@ const SendCryptoScreen = () => {
     const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [twoFACode, setTwoFACode] = useState('');
     const [emailCode, setEmailCode] = useState('');
-    const authenticatorCode = 'AW213CFJDK2R';
+    const [sendData, setSendData] = useState<any>(null);
+    const authenticatorCode = 'AW213CFJDK2R'; // Dummy code for 2FA setup
 
+    // Fetch USDT blockchains if needed
+    const { data: blockchainsData } = useUsdtBlockchains();
+    
+    // Mutation
+    const sendMutation = useSendCrypto();
+
+    // Get available networks based on crypto type
+    const getAvailableNetworks = () => {
+        if (cryptoType === 'USDT' && blockchainsData?.data) {
+            return blockchainsData.data.map((bc: any) => ({
+                id: bc.blockchain,
+                name: `${bc.blockchain} (${bc.blockchain_name || bc.blockchain})`,
+                creditingTime: bc.crediting_time || '1 min',
+            }));
+        }
+        // For other cryptos, use default blockchain
+        return [{
+            id: cryptoType,
+            name: `${cryptoType} (${cryptoType})`,
+            creditingTime: '1 min',
+        }];
+    };
+
+    const networks = getAvailableNetworks();
+
+    // Set default network on mount
+    useEffect(() => {
+        if (!selectedNetwork && networks.length > 0) {
+            const defaultNetwork = networks[0];
+            setSelectedNetwork(defaultNetwork.name);
+            setSelectedNetworkId(defaultNetwork.id);
+        }
+    }, [cryptoType, blockchainsData]);
+
+    // For USDT, ensure blockchain is selected
+    useEffect(() => {
+        if (cryptoType === 'USDT' && !selectedNetworkId && blockchainsData?.data && blockchainsData.data.length > 0) {
+            const defaultBlockchain = blockchainsData.data[0];
+            setSelectedNetwork(`${defaultBlockchain.blockchain} (${defaultBlockchain.blockchain_name || defaultBlockchain.blockchain})`);
+            setSelectedNetworkId(defaultBlockchain.blockchain);
+        }
+    }, [cryptoType, blockchainsData, selectedNetworkId]);
+
+    // Handle Max button
+    const handleMaxAmount = () => {
+        const balanceNum = parseFloat(balance.replace(/,/g, ''));
+        if (!isNaN(balanceNum)) {
+            setAmount(balanceNum.toString());
+        }
+    };
+
+    // Get crypto amount (always in crypto for send)
+    const getCryptoAmount = (): number => {
+        if (!amount) return 0;
+        const amountNum = parseFloat(amount);
+        if (isNaN(amountNum)) return 0;
+        // For send, amount is always in crypto
+        return amountNum;
+    };
+
+    // Handle proceed to summary
     const handleProceed = () => {
-        if (!selectedNetwork) {
-            setShowNetworkModal(true);
+        if (!selectedNetworkId || !amount || !withdrawalAddress.trim()) {
+            Alert.alert('Error', 'Please fill all fields');
             return;
         }
+
+        const cryptoAmount = getCryptoAmount();
+        if (cryptoAmount <= 0) {
+            Alert.alert('Error', 'Please enter a valid amount');
+            return;
+        }
+
+        // Check if amount exceeds balance
+        const balanceNum = parseFloat(balance.replace(/,/g, ''));
+        if (cryptoAmount > balanceNum) {
+            Alert.alert('Error', 'Amount exceeds available balance');
+            return;
+        }
+
+        // Validate address format (basic check)
+        if (withdrawalAddress.trim().length < 10) {
+            Alert.alert('Error', 'Please enter a valid withdrawal address');
+            return;
+        }
+
+        setSendData({
+            currency: cryptoType,
+            blockchain: selectedNetworkId,
+            amount: cryptoAmount,
+            address: withdrawalAddress.trim(),
+            network: selectedNetworkId,
+        });
         setShowSummaryModal(true);
     };
 
+    // Handle summary proceed - go to 2FA setup (dummy flow)
     const handleSummaryProceed = () => {
         setShowSummaryModal(false);
         setShow2FASetupModal(true);
     };
 
+    // Handle 2FA setup - go to 2FA input (dummy)
     const handleSetup2FA = () => {
         setShow2FASetupModal(false);
         setShow2FAInputModal(true);
     };
 
+    // Handle complete 2FA - go to security verification (dummy)
     const handleComplete2FA = () => {
+        // Dummy: Just proceed without validating 2FA
         setShow2FAInputModal(false);
         setShowSecurityModal(true);
     };
 
-    const handleSecurityProceed = () => {
+    // Handle security proceed - actually send crypto
+    const handleSecurityProceed = async () => {
         setShowSecurityModal(false);
-        setShowSuccessModal(true);
+        
+        if (!sendData) {
+            Alert.alert('Error', 'Transaction data missing');
+            return;
+        }
+
+        try {
+            const result = await sendMutation.mutateAsync(sendData);
+
+            if (result.success) {
+                setShowSuccessModal(true);
+            } else {
+                Alert.alert('Error', result.message || 'Transaction failed');
+            }
+        } catch (error: any) {
+            console.error('Send error:', error);
+            Alert.alert(
+                'Error',
+                error.response?.data?.message || error.message || 'Transaction failed'
+            );
+        }
+    };
+
+    // Handle copy address
+    const handleCopyAddress = async () => {
+        try {
+            await Clipboard.setStringAsync(withdrawalAddress);
+            Alert.alert('Success', 'Address copied to clipboard');
+        } catch (error) {
+            Alert.alert('Error', 'Failed to copy address');
+        }
+    };
+
+    // Handle paste 2FA code (dummy - just for UI)
+    const handlePaste2FA = async () => {
+        try {
+            const text = await Clipboard.getStringAsync();
+            if (text) {
+                setTwoFACode(text);
+            }
+        } catch (error) {
+            // Silently fail for dummy flow
+        }
+    };
+
+    // Handle paste security code (dummy - just for UI)
+    const handlePasteSecurity = async () => {
+        try {
+            const text = await Clipboard.getStringAsync();
+            if (text) {
+                setEmailCode(text);
+            }
+        } catch (error) {
+            // Silently fail for dummy flow
+        }
+    };
+
+    // Handle copy authenticator code (dummy)
+    const handleCopyAuthenticatorCode = async () => {
+        try {
+            await Clipboard.setStringAsync(authenticatorCode);
+            Alert.alert('Success', 'Code copied to clipboard');
+        } catch (error) {
+            Alert.alert('Error', 'Failed to copy code');
+        }
     };
 
     const handleSuccessTransaction = () => {
         setShowSuccessModal(false);
-        navigation.navigate('TransactionHistory', {
-            type: 'crypto',
-            transactionData: {
-                type: `Crypto Withdrawal - ${cryptoType}`,
-                amount: amount,
-                date: new Date().toLocaleString(),
-                status: 'Successful',
-                cryptoType: 'Send',
-                network: selectedNetwork,
-                address: withdrawalAddress,
-                txHash: '1234567890sk2kdmwkdqkdskw',
-                transactionId: '2348hf8283hfc92eni',
-            },
-        });
+        if (sendMutation.data?.data?.transaction) {
+            navigation.navigate('TransactionHistory', {
+                type: 'crypto',
+                transactionData: {
+                    id: sendMutation.data.data.transaction.id,
+                    transaction_id: sendMutation.data.data.transaction.transaction_id,
+                    type: `Crypto Withdrawal - ${cryptoType}`,
+                    amount: sendMutation.data.data.transaction.amount,
+                    date: sendMutation.data.data.transaction.created_at,
+                    status: sendMutation.data.data.transaction.status,
+                    cryptoType: 'Send',
+                    network: selectedNetwork,
+                    address: withdrawalAddress,
+                    txHash: sendMutation.data.data.tx_hash,
+                },
+            });
+        } else {
+            navigation.goBack();
+        }
     };
 
     return (
@@ -139,21 +302,11 @@ const SendCryptoScreen = () => {
                 <View style={styles.amountContainer}>
                     <View style={styles.currencyToggle}>
                         <TouchableOpacity
-                            style={[styles.toggleOption, currencyType === 'BTC' && styles.toggleOptionActive]}
-                            onPress={() => setCurrencyType('BTC')}
+                            style={[styles.toggleOption, styles.toggleOptionActive]}
                             activeOpacity={0.8}
                         >
-                            <ThemedText style={[styles.toggleText, currencyType === 'BTC' && styles.toggleTextActive]}>
-                                BTC
-                            </ThemedText>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.toggleOption, currencyType === 'USD' && styles.toggleOptionActive]}
-                            onPress={() => setCurrencyType('USD')}
-                            activeOpacity={0.8}
-                        >
-                            <ThemedText style={[styles.toggleText, currencyType === 'USD' && styles.toggleTextActive]}>
-                                USD
+                            <ThemedText style={[styles.toggleText, styles.toggleTextActive]}>
+                                {cryptoType}
                             </ThemedText>
                         </TouchableOpacity>
                     </View>
@@ -164,7 +317,16 @@ const SendCryptoScreen = () => {
                         keyboardType="numeric"
                         placeholder="0"
                     />
-                    <TouchableOpacity style={styles.maxButton} activeOpacity={0.8}>
+                    <TouchableOpacity 
+                        style={styles.maxButton} 
+                        activeOpacity={0.8}
+                        onPress={() => {
+                            const balanceNum = parseFloat(balance.replace(/,/g, ''));
+                            if (!isNaN(balanceNum)) {
+                                setAmount(balanceNum.toString());
+                            }
+                        }}
+                    >
                         <ThemedText style={styles.maxButtonText}>Max</ThemedText>
                     </TouchableOpacity>
                 </View>
@@ -199,16 +361,24 @@ const SendCryptoScreen = () => {
                         style={styles.feeIcon}
                         resizeMode="contain"
                     />
-                    <ThemedText style={styles.feeText}>Fee: $3 = N5,500</ThemedText>
+                    <ThemedText style={styles.feeText}>Fee: $3 USD (fixed fee per transaction)</ThemedText>
                 </View>
 
                 {/* Proceed Button */}
                 <TouchableOpacity
-                    style={styles.proceedButton}
+                    style={[
+                        styles.proceedButton,
+                        (sendMutation.isPending || !amount || !withdrawalAddress.trim() || !selectedNetworkId) && styles.proceedButtonDisabled
+                    ]}
                     onPress={handleProceed}
                     activeOpacity={0.8}
+                    disabled={sendMutation.isPending || !amount || !withdrawalAddress.trim() || !selectedNetworkId}
                 >
-                    <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    {sendMutation.isPending ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                        <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    )}
                 </TouchableOpacity>
             </ScrollView>
 
@@ -300,7 +470,7 @@ const SendCryptoScreen = () => {
                             <ThemedText style={styles.pendingText}>Pending</ThemedText>
                             <ThemedText style={styles.pendingDescription}>
                                 You are about to make a withdrawal of{' '}
-                                <ThemedText style={styles.pendingAmount}>{balance.replace('.', ',')} {cryptoType}</ThemedText>
+                                <ThemedText style={styles.pendingAmount}>{amount} {cryptoType}</ThemedText>
                             </ThemedText>
                         </View>
 
@@ -308,19 +478,11 @@ const SendCryptoScreen = () => {
                         <View style={styles.summaryDetails}>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Amount:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{amount} {currencyType === 'USD' ? 'USD' : cryptoType}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>{amount} {cryptoType}</ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Fee:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>0.0000000012 {cryptoType}</ThemedText>
-                            </View>
-                            <View style={styles.summaryRow}>
-                                <ThemedText style={styles.summaryLabel}>Total Amount:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{balance.replace('.', ',')} {cryptoType}</ThemedText>
-                            </View>
-                            <View style={styles.summaryRow}>
-                                <ThemedText style={styles.summaryLabel}>Amount in USD:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{usdValue}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>~$3 USD (fixed)</ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Network:</ThemedText>
@@ -330,9 +492,12 @@ const SendCryptoScreen = () => {
                                 <ThemedText style={styles.summaryLabel}>Address:</ThemedText>
                                 <View style={styles.addressRow}>
                                     <ThemedText style={styles.summaryValue} numberOfLines={1}>
-                                        {withdrawalAddress || '1234567890sk2kdmwkdqkdskw'}
+                                        {withdrawalAddress || 'No address'}
                                     </ThemedText>
-                                    <TouchableOpacity activeOpacity={0.8}>
+                                    <TouchableOpacity 
+                                        activeOpacity={0.8}
+                                        onPress={handleCopyAddress}
+                                    >
                                         <Ionicons name="copy-outline" size={16} color="#1B800F" />
                                     </TouchableOpacity>
                                 </View>
@@ -436,7 +601,10 @@ const SendCryptoScreen = () => {
                             <ThemedText style={styles.authenticatorCodeLabel}>Authenticator Code</ThemedText>
                             <View style={styles.authenticatorCodeRow}>
                                 <ThemedText style={styles.authenticatorCode}>{authenticatorCode}</ThemedText>
-                                <TouchableOpacity activeOpacity={0.8}>
+                                <TouchableOpacity 
+                                    activeOpacity={0.8}
+                                    onPress={handleCopyAuthenticatorCode}
+                                >
                                     <Ionicons name="copy-outline" size={20} color="#FFFFFF" />
                                 </TouchableOpacity>
                             </View>
@@ -451,7 +619,11 @@ const SendCryptoScreen = () => {
                                 value={twoFACode}
                                 onChangeText={setTwoFACode}
                             />
-                            <TouchableOpacity style={styles.pasteButton} activeOpacity={0.8}>
+                            <TouchableOpacity 
+                                style={styles.pasteButton} 
+                                activeOpacity={0.8}
+                                onPress={handlePaste2FA}
+                            >
                                 <ThemedText style={styles.pasteButtonText}>Paste</ThemedText>
                             </TouchableOpacity>
                         </View>
@@ -520,7 +692,14 @@ const SendCryptoScreen = () => {
                                 value={emailCode}
                                 onChangeText={setEmailCode}
                             />
-                            <TouchableOpacity style={styles.getCodeButton} activeOpacity={0.8}>
+                            <TouchableOpacity 
+                                style={styles.getCodeButton} 
+                                activeOpacity={0.8}
+                                onPress={() => {
+                                    // Dummy: Just show alert
+                                    Alert.alert('Info', 'Email code sent (dummy)');
+                                }}
+                            >
                                 <ThemedText style={styles.getCodeButtonText}>Get Code</ThemedText>
                             </TouchableOpacity>
                         </View>
@@ -534,7 +713,11 @@ const SendCryptoScreen = () => {
                                 value={twoFACode}
                                 onChangeText={setTwoFACode}
                             />
-                            <TouchableOpacity style={styles.pasteSecurityButton} activeOpacity={0.8}>
+                            <TouchableOpacity 
+                                style={styles.pasteSecurityButton} 
+                                activeOpacity={0.8}
+                                onPress={handlePasteSecurity}
+                            >
                                 <ThemedText style={styles.pasteSecurityButtonText}>Paste</ThemedText>
                             </TouchableOpacity>
                         </View>
@@ -542,11 +725,19 @@ const SendCryptoScreen = () => {
                         {/* Action Buttons */}
                         <View style={styles.securityButtons}>
                             <TouchableOpacity
-                                style={styles.proceedSecurityButton}
+                                style={[
+                                    styles.proceedSecurityButton,
+                                    sendMutation.isPending && styles.proceedSecurityButtonDisabled
+                                ]}
                                 onPress={handleSecurityProceed}
                                 activeOpacity={0.8}
+                                disabled={sendMutation.isPending}
                             >
-                                <ThemedText style={styles.proceedSecurityButtonText}>Proceed</ThemedText>
+                                {sendMutation.isPending ? (
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                    <ThemedText style={styles.proceedSecurityButtonText}>Proceed</ThemedText>
+                                )}
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.cancelSecurityButton}
@@ -587,8 +778,8 @@ const SendCryptoScreen = () => {
                         </View>
                         <ThemedText style={styles.successTitle}>Success</ThemedText>
                         <ThemedText style={styles.successMessage}>
-                            You have successfully completed a withdrawal of 
-                            <ThemedText style={styles.successAmount}>{balance.replace('.', ',')} {cryptoType}</ThemedText>
+                            You have successfully completed a withdrawal of{' '}
+                            <ThemedText style={styles.successAmount}>{amount} {cryptoType}</ThemedText>
                         </ThemedText>
                         <View style={styles.successButtons}>
                             <TouchableOpacity
@@ -780,6 +971,12 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '400',
         color: '#FFFFFF',
+    },
+    proceedButtonDisabled: {
+        opacity: 0.6,
+    },
+    proceedSecurityButtonDisabled: {
+        opacity: 0.6,
     },
     networkModalOverlay: {
         flex: 1,

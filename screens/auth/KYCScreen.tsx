@@ -1,13 +1,20 @@
-import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Alert, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
+import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { CompositeNavigationProp } from '@react-navigation/native';
 import ThemedText from '../../components/ThemedText';
+import { useSubmitKyc } from '../../mutations/kycMutations';
+import { useUserProfile } from '../../queries/userQueries';
+import { useKyc } from '../../queries/kycQueries';
 
-type NavigationProp = NativeStackNavigationProp<AuthStackParamList>;
+type AuthNavigationProp = NativeStackNavigationProp<AuthStackParamList>;
+type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type NavigationProp = CompositeNavigationProp<AuthNavigationProp, RootNavigationProp>;
 
 const { width, height } = Dimensions.get('window');
 
@@ -19,6 +26,109 @@ const KYCScreen = () => {
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [bvn, setBvn] = useState('');
   const [nin, setNin] = useState('');
+  const submitKycMutation = useSubmitKyc();
+  const { data: userData, isLoading: isLoadingUser } = useUserProfile();
+  const { data: kycData, isLoading: isLoadingKyc, error: kycError } = useKyc();
+
+  // Log KYC query status
+  useEffect(() => {
+    if (kycError) {
+      console.log('⚠️ KYC Query Error (non-blocking):', kycError);
+    }
+    if (kycData) {
+      console.log('ℹ️ KYC Query Data:', JSON.stringify(kycData, null, 2));
+    }
+  }, [kycData, kycError]);
+
+  // Pre-fill form with user data if available
+  useEffect(() => {
+    if (userData?.data?.user) {
+      const user = userData.data.user;
+      if (user.first_name && !firstName) setFirstName(user.first_name);
+      if (user.last_name && !lastName) setLastName(user.last_name);
+      if (user.email && !email) setEmail(user.email);
+    }
+  }, [userData]);
+
+  // Pre-fill form with existing KYC data if available
+  useEffect(() => {
+    if (kycData?.data?.kyc && kycData.data.kyc !== null) {
+      const kyc = kycData.data.kyc;
+      console.log('📝 KYC Screen - Pre-filling form with existing KYC data:', JSON.stringify(kyc, null, 2));
+      if (kyc.first_name && !firstName) setFirstName(kyc.first_name);
+      if (kyc.last_name && !lastName) setLastName(kyc.last_name);
+      if (kyc.email && !email) setEmail(kyc.email);
+      if (kyc.date_of_birth && !dateOfBirth) setDateOfBirth(kyc.date_of_birth);
+      if (kyc.bvn_number && !bvn) setBvn(kyc.bvn_number);
+      if (kyc.nin_number && !nin) setNin(kyc.nin_number);
+    } else {
+      console.log('ℹ️ KYC Screen - No existing KYC data to pre-fill');
+    }
+  }, [kycData]);
+
+  const handleSubmitKyc = async () => {
+    // KYC fields are optional, so we can submit with whatever is filled
+    const kycData: any = {};
+    
+    if (firstName.trim()) kycData.first_name = firstName.trim();
+    if (lastName.trim()) kycData.last_name = lastName.trim();
+    if (email.trim()) kycData.email = email.trim();
+    if (dateOfBirth.trim()) kycData.date_of_birth = dateOfBirth.trim();
+    if (bvn.trim()) kycData.bvn_number = bvn.trim();
+    if (nin.trim()) kycData.nin_number = nin.trim();
+
+    console.log('🔵 KYC Submission - Request Data:', JSON.stringify(kycData, null, 2));
+
+    // At least one field should be filled
+    if (Object.keys(kycData).length === 0) {
+      console.log('❌ KYC Submission - Validation Error: No fields filled');
+      Alert.alert('Validation Error', 'Please fill at least one field');
+      return;
+    }
+
+    try {
+      console.log('🟡 KYC Submission - Calling API...');
+      const result = await submitKycMutation.mutateAsync(kycData);
+      
+      console.log('🟢 KYC Submission - API Response:', JSON.stringify(result, null, 2));
+
+      if (result.success) {
+        console.log('✅ KYC Submission - Success, navigating to PIN setup');
+        // Navigate to PIN setup screen
+        navigation.navigate('PinSetup');
+      } else {
+        console.log('❌ KYC Submission - Failed:', result.message);
+        Alert.alert('KYC Submission Failed', result.message || 'An error occurred. Please try again.');
+      }
+    } catch (error: any) {
+      console.log('❌ KYC Submission - Error Caught:');
+      console.log('Error Object:', JSON.stringify(error, null, 2));
+      console.log('Error Message:', error?.message);
+      console.log('Error Data:', error?.data);
+      console.log('Error Status:', error?.status);
+      console.log('Error Response:', error?.response);
+      console.log('Full Error:', error);
+
+      // Handle validation errors from backend
+      if (error?.data?.errors) {
+        const errorMessages = Object.values(error.data.errors).flat().join('\n');
+        console.log('❌ KYC Submission - Validation Errors:', errorMessages);
+        Alert.alert('KYC Submission Failed', errorMessages);
+      } else if (error?.response?.data) {
+        console.log('❌ KYC Submission - Response Error:', JSON.stringify(error.response.data, null, 2));
+        Alert.alert(
+          'KYC Submission Failed',
+          error.response.data?.message || error?.message || 'An error occurred. Please try again.'
+        );
+      } else {
+        console.log('❌ KYC Submission - Unknown Error:', error);
+        Alert.alert(
+          'KYC Submission Failed',
+          error?.message || error?.data?.message || 'An error occurred. Please try again.'
+        );
+      }
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -140,10 +250,15 @@ const KYCScreen = () => {
 
         {/* Proceed Button */}
         <TouchableOpacity 
-          style={styles.proceedButton}
-          onPress={() => navigation.navigate('PinSetup')}
+          style={[styles.proceedButton, submitKycMutation.isPending && styles.proceedButtonDisabled]}
+          onPress={handleSubmitKyc}
+          disabled={submitKycMutation.isPending}
         >
-          <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+          {submitKycMutation.isPending ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+          )}
         </TouchableOpacity>
       </View>
     </View>
@@ -273,6 +388,9 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  proceedButtonDisabled: {
+    opacity: 0.6,
   },
 });
 

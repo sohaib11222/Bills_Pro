@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Image, StyleSheet, TouchableOpacity, Dimensions, Alert, ActivityIndicator } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,6 +9,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompositeNavigationProp } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import ThemedText from '../../components/ThemedText';
+import { useSetPin } from '../../mutations/authMutations';
+import { useAuth } from '../../services/context/AuthContext';
 
 type AuthNavigationProp = NativeStackNavigationProp<AuthStackParamList>;
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -22,26 +24,12 @@ const ReEnterPinScreen = () => {
   const route = useRoute<RouteProps>();
   const initialPin = route.params?.initialPin || '';
   const [pin, setPin] = useState('');
+  const setPinMutation = useSetPin();
+  const { checkAuth } = useAuth();
 
   const handleNumberPress = (num: string) => {
     if (pin.length < 4) {
-      const newPin = pin + num;
-      setPin(newPin);
-      if (newPin.length === 4) {
-        // Auto-navigate when PIN is complete
-        setTimeout(() => {
-          if (newPin === initialPin) {
-            const parent = navigation.getParent();
-            if (parent) {
-              parent.navigate('Main');
-            }
-          } else {
-            // PINs don't match, show error or reset
-            setPin('');
-            alert('PINs do not match. Please try again.');
-          }
-        }, 100);
-      }
+      setPin(pin + num);
     }
   };
 
@@ -49,18 +37,53 @@ const ReEnterPinScreen = () => {
     setPin(pin.slice(0, -1));
   };
 
-  const handleNext = () => {
-    if (pin.length === 4) {
-      if (pin === initialPin) {
+  const handleSubmitPin = async () => {
+    if (pin.length !== 4) {
+      Alert.alert('Error', 'Please enter a complete 4-digit PIN');
+      return;
+    }
+
+    if (pin !== initialPin) {
+      Alert.alert('PIN Mismatch', 'PINs do not match. Please try again.');
+      setPin('');
+      return;
+    }
+
+    try {
+      const result = await setPinMutation.mutateAsync({
+        pin: pin,
+        pin_confirmation: pin,
+      });
+
+      if (result.success) {
+        // Refresh auth state
+        await checkAuth();
+        // Navigate to Main app
         const parent = navigation.getParent();
         if (parent) {
           parent.navigate('Main');
         }
       } else {
+        Alert.alert('PIN Setup Failed', result.message || 'Failed to set PIN. Please try again.');
         setPin('');
-        alert('PINs do not match. Please try again.');
       }
+    } catch (error: any) {
+      // Handle validation errors from backend
+      if (error?.data?.errors) {
+        const errorMessages = Object.values(error.data.errors).flat().join('\n');
+        Alert.alert('PIN Setup Failed', errorMessages);
+      } else {
+        Alert.alert(
+          'PIN Setup Failed',
+          error?.message || error?.data?.message || 'Failed to set PIN. Please try again.'
+        );
+      }
+      setPin('');
     }
+  };
+
+  const handleNext = () => {
+    handleSubmitPin();
   };
 
   return (
@@ -195,10 +218,15 @@ const ReEnterPinScreen = () => {
               <Ionicons name="backspace-outline" size={24} color="#000000" />
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.nextButton}
+              style={[styles.nextButton, setPinMutation.isPending && styles.nextButtonDisabled]}
               onPress={handleNext}
+              disabled={setPinMutation.isPending || pin.length !== 4}
             >
-              <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+              {setPinMutation.isPending ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -368,6 +396,9 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  nextButtonDisabled: {
+    opacity: 0.6,
   },
 });
 

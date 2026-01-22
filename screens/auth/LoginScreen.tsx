@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Linking } from 'react-native';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Linking, Alert, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
@@ -7,6 +7,8 @@ import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompositeNavigationProp } from '@react-navigation/native';
 import ThemedText from '../../components/ThemedText';
+import { useLogin } from '../../mutations/authMutations';
+import { useAuth } from '../../services/context/AuthContext';
 
 type AuthNavigationProp = NativeStackNavigationProp<AuthStackParamList>;
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -18,6 +20,46 @@ const LoginScreen = () => {
   const navigation = useNavigation<NavigationProp>();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const loginMutation = useLogin();
+  const { checkAuth } = useAuth();
+
+  const handleLogin = async () => {
+    if (!email.trim()) {
+      Alert.alert('Error', 'Please enter your email address');
+      return;
+    }
+
+    if (!password.trim()) {
+      Alert.alert('Error', 'Please enter your password');
+      return;
+    }
+
+    try {
+      const result = await loginMutation.mutateAsync({
+        email: email.trim(),
+        password,
+      });
+
+      if (result.success) {
+        // Refresh auth state
+        await checkAuth();
+        // Navigate to main app
+        const parent = navigation.getParent();
+        if (parent) {
+          parent.navigate('Main');
+        } else {
+          navigation.navigate('Main');
+        }
+      } else {
+        Alert.alert('Login Failed', result.message || 'Invalid credentials. Please try again.');
+      }
+    } catch (error: any) {
+      Alert.alert(
+        'Login Failed',
+        error?.message || error?.data?.message || 'An error occurred. Please try again.'
+      );
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -86,10 +128,15 @@ const LoginScreen = () => {
 
           {/* Login Button */}
           <TouchableOpacity 
-            style={styles.loginButton}
-            onPress={() => navigation.navigate('Main')}
+            style={[styles.loginButton, (loginMutation.isPending || !email.trim() || !password.trim()) && styles.loginButtonDisabled]}
+            onPress={handleLogin}
+            disabled={loginMutation.isPending || !email.trim() || !password.trim()}
           >
-            <ThemedText style={styles.loginButtonText}>Login</ThemedText>
+            {loginMutation.isPending ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <ThemedText style={styles.loginButtonText}>Login</ThemedText>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -223,6 +270,9 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  loginButtonDisabled: {
+    opacity: 0.6,
   },
   legalContainer: {
     position: 'absolute',

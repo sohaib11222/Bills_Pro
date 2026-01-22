@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -9,14 +9,19 @@ import {
     Dimensions,
     Platform,
     StatusBar as RNStatusBar,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { getProfileImage, removeProfileImage } from '../../services/storage/appStorage';
+import { useUserProfile } from '../../queries/userQueries';
+import { useLogout } from '../../mutations/authMutations';
+import { useAuth } from '../../services/context/AuthContext';
 
 const { width, height } = Dimensions.get('window');
 
@@ -24,6 +29,65 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const ProfileScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
+    const { data } = useUserProfile();
+    const user = data?.data?.user;
+    const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
+    const logoutMutation = useLogout();
+    const { checkAuth } = useAuth();
+
+    // Load profile image when screen comes into focus
+    useFocusEffect(
+        React.useCallback(() => {
+            const loadProfileImage = async () => {
+                const storedImage = await getProfileImage();
+                if (storedImage) {
+                    setProfileImageUri(storedImage);
+                }
+            };
+            loadProfileImage();
+        }, [])
+    );
+
+    const userName = user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() : 'User';
+    const isVerified = user?.email_verified_at ? 'Verified' : 'Unverified';
+
+    const handleLogout = () => {
+        Alert.alert(
+            'Logout',
+            'Are you sure you want to logout?',
+            [
+                {
+                    text: 'Cancel',
+                    style: 'cancel',
+                },
+                {
+                    text: 'Logout',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            // Clear profile image
+                            await removeProfileImage();
+                            
+                            // Logout (clears auth data and query cache)
+                            await logoutMutation.mutateAsync();
+                            
+                            // Update auth context
+                            await checkAuth();
+                            
+                            // Navigate to Auth screen
+                            navigation.reset({
+                                index: 0,
+                                routes: [{ name: 'Auth' }],
+                            });
+                        } catch (error) {
+                            console.error('Logout error:', error);
+                            Alert.alert('Error', 'Failed to logout. Please try again.');
+                        }
+                    },
+                },
+            ]
+        );
+    };
   return (
         <View style={styles.container}>
             <StatusBar style="light" />
@@ -40,21 +104,23 @@ const ProfileScreen = () => {
                     <View style={styles.userInfoContainer}>
                         <View style={styles.avatarContainer}>
                             <Image
-                                source={require('../../assets/dummy_avatar.png')}
+                                source={profileImageUri ? { uri: profileImageUri } : require('../../assets/dummy_avatar.png')}
                                 style={styles.avatar}
                                 resizeMode="cover"
                             />
-                            <View style={styles.verifiedBadge}>
-                                <Image
-                                    source={require('../../assets/Vector (55).png')}
-                                    style={styles.verifiedIcon}
-                                    resizeMode="contain"
-                                />
-                            </View>
+                            {isVerified === 'Verified' && (
+                                <View style={styles.verifiedBadge}>
+                                    <Image
+                                        source={require('../../assets/Vector (55).png')}
+                                        style={styles.verifiedIcon}
+                                        resizeMode="contain"
+                                    />
+                                </View>
+                            )}
                         </View>
                         <View style={styles.userInfoText}>
-                            <ThemedText style={styles.userName}>Qamardeen, AbdulMalik</ThemedText>
-                            <ThemedText style={styles.verifiedText}>Verified</ThemedText>
+                            <ThemedText style={styles.userName}>{userName || 'User'}</ThemedText>
+                            <ThemedText style={styles.verifiedText}>{isVerified}</ThemedText>
                         </View>
                     </View>
                 </View>
@@ -186,13 +252,20 @@ const ProfileScreen = () => {
                 </View>
 
                 {/* Logout Option */}
-                <TouchableOpacity style={styles.logoutItem} activeOpacity={0.7}>
+                <TouchableOpacity 
+                    style={styles.logoutItem} 
+                    activeOpacity={0.7}
+                    onPress={handleLogout}
+                    disabled={logoutMutation.isPending}
+                >
                     <Image
                         source={require('../../assets/SignOut.png')}
                         style={styles.logoutIcon}
                         resizeMode="contain"
                     />
-                    <ThemedText style={styles.logoutText}>Logout</ThemedText>
+                    <ThemedText style={styles.logoutText}>
+                        {logoutMutation.isPending ? 'Logging out...' : 'Logout'}
+                    </ThemedText>
                 </TouchableOpacity>
 
                 {/* Bottom padding for tab bar */}

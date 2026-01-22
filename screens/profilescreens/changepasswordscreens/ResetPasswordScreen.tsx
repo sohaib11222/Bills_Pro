@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -8,6 +8,9 @@ import {
     Dimensions,
     Platform,
     StatusBar as RNStatusBar,
+    KeyboardAvoidingView,
+    Alert,
+    ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +18,8 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../../components/ThemedText';
+import { useForgotPassword } from '../../../mutations/authMutations';
+import { useUserProfile } from '../../../queries/userQueries';
 
 const { width } = Dimensions.get('window');
 
@@ -22,20 +27,62 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const ResetPasswordScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
+    const { data } = useUserProfile();
+    const user = data?.data?.user;
     const [email, setEmail] = useState('');
+    const forgotPasswordMutation = useForgotPassword();
 
-    const isFormValid = () => {
-        return email.trim() !== '' && email.includes('@');
-    };
+    // Pre-populate email from user profile
+    useEffect(() => {
+        if (user?.email) {
+            setEmail(user.email);
+        }
+    }, [user]);
 
-    const handleProceed = () => {
-        if (isFormValid()) {
-            navigation.navigate('ResetPasswordCode', { email });
+    const handleProceed = async () => {
+        const emailToUse = email.trim() || user?.email;
+        
+        if (!emailToUse) {
+            Alert.alert('Error', 'Email address is required');
+            return;
+        }
+
+        // Basic email validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(emailToUse)) {
+            Alert.alert('Validation Error', 'Please enter a valid email address');
+            return;
+        }
+
+        try {
+            const result = await forgotPasswordMutation.mutateAsync({
+                email: emailToUse,
+            });
+
+            if (result.success) {
+                navigation.navigate('ResetPasswordCode', { email: emailToUse });
+            } else {
+                Alert.alert('Error', result.message || 'Failed to send reset code. Please try again.');
+            }
+        } catch (error: any) {
+            Alert.alert(
+                'Error',
+                error?.message || error?.data?.message || 'Failed to send reset code. Please try again.'
+            );
         }
     };
 
+    const isFormValid = () => {
+        const emailToUse = email.trim() || user?.email;
+        return emailToUse && emailToUse.includes('@');
+    };
+
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView
+            style={styles.container}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
             <StatusBar style="dark" />
             
             {/* Header */}
@@ -55,6 +102,7 @@ const ResetPasswordScreen = () => {
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
             >
                 <View style={styles.contentSection}>
                     <ThemedText style={styles.mainTitle}>Reset Password</ThemedText>
@@ -69,7 +117,13 @@ const ResetPasswordScreen = () => {
                             placeholderTextColor="#9CA3AF"
                             keyboardType="email-address"
                             autoCapitalize="none"
+                            editable={!!user?.email}
                         />
+                        {user?.email && (
+                            <ThemedText style={{ fontSize: 10, color: '#9CA3AF', marginTop: 4, marginLeft: 4 }}>
+                                Using your account email
+                            </ThemedText>
+                        )}
                     </View>
                 </View>
             </ScrollView>
@@ -79,23 +133,27 @@ const ResetPasswordScreen = () => {
                 <TouchableOpacity
                     style={[
                         styles.proceedButton,
-                        !isFormValid() && styles.proceedButtonDisabled,
+                        (!isFormValid() || forgotPasswordMutation.isPending) && styles.proceedButtonDisabled,
                     ]}
                     activeOpacity={0.8}
                     onPress={handleProceed}
-                    disabled={!isFormValid()}
+                    disabled={!isFormValid() || forgotPasswordMutation.isPending}
                 >
-                    <ThemedText
-                        style={[
-                            styles.proceedButtonText,
-                            !isFormValid() && styles.proceedButtonTextDisabled,
-                        ]}
-                    >
-                        Proceed
-                    </ThemedText>
+                    {forgotPasswordMutation.isPending ? (
+                        <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                        <ThemedText
+                            style={[
+                                styles.proceedButtonText,
+                                (!isFormValid() || forgotPasswordMutation.isPending) && styles.proceedButtonTextDisabled,
+                            ]}
+                        >
+                            Proceed
+                        </ThemedText>
+                    )}
                 </TouchableOpacity>
             </View>
-        </View>
+        </KeyboardAvoidingView>
     );
 };
 

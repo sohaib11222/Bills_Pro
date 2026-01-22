@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -6,17 +6,26 @@ import {
   TouchableOpacity,
   Dimensions,
   Image,
+  ActivityIndicator,
+  RefreshControl,
+  Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import ThemedText from '../../components/ThemedText';
+import { 
+  useAllTransactions, 
+  useBillPaymentTransactions 
+} from '../../queries/transactionQueries';
 
 const { width } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type AllTransactionsRouteProp = RouteProp<RootStackParamList, 'AllTransactions'>;
 
 type FilterType = 'All Transactions' | 'Bill Payments' | 'Crypto' | 'Virtual Cards';
 type BillPaymentCategory = 'All' | 'Airtime' | 'Data' | 'Cable TV' | 'Electricity' | 'Internet' | 'Betting';
@@ -25,10 +34,14 @@ type VirtualCardCategory = 'All Transactions' | 'Fund' | 'Withdraw' | 'Payments'
 
 const AllTransactionsScreen = () => {
   const navigation = useNavigation<RootNavigationProp>();
+  const route = useRoute<AllTransactionsRouteProp>();
+  const initialFilter = route.params?.initialFilter || 'All Transactions';
+  const walletType = route.params?.wallet_type;
+
   const [showAllTransactionsDropdown, setShowAllTransactionsDropdown] = useState(false);
   const [showDateDropdown, setShowDateDropdown] = useState(false);
   const [showAllFilterDropdown, setShowAllFilterDropdown] = useState(false);
-  const [selectedFilter, setSelectedFilter] = useState<FilterType>('All Transactions');
+  const [selectedFilter, setSelectedFilter] = useState<FilterType>(initialFilter);
   const [selectedBillCategory, setSelectedBillCategory] = useState<BillPaymentCategory>('All');
   const [selectedCryptoCategory, setSelectedCryptoCategory] = useState<CryptoCategory>('All Transactions');
   const [selectedVirtualCardCategory, setSelectedVirtualCardCategory] = useState<VirtualCardCategory>('All Transactions');
@@ -41,428 +54,426 @@ const AllTransactionsScreen = () => {
   const [allTransactionsButtonLayout, setAllTransactionsButtonLayout] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [dateFilterButtonLayout, setDateFilterButtonLayout] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [allFilterButtonLayout, setAllFilterButtonLayout] = useState({ x: 0, y: 0, width: 0, height: 0 });
+  const [selectedDateFilter, setSelectedDateFilter] = useState<string>('');
+  const [refreshing, setRefreshing] = useState(false);
 
-  const allTransactions = [
-    {
-      id: '1',
-      type: 'Funds Deposit',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-    },
-    {
-      id: '2',
-      type: 'Funds Deposit',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-    },
-    {
-      id: '3',
-      type: 'Funds Deposit',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-    },
-    {
-      id: '4',
-      type: 'Funds Deposit',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-    },
-    {
-      id: '5',
-      type: 'Funds Deposit',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-    },
-    {
-      id: '6',
-      type: 'Funds Deposit',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-    },
-    {
-      id: '7',
-      type: 'Funds Deposit',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-    },
-    {
-      id: '8',
-      type: 'Funds Withdrawal',
-      status: 'Successful',
-      amount: '20,000',
-      date: '05 Oct, 25 - 08:00 PM',
-      isDeposit: false,
-    },
-    {
-      id: '9',
-      type: 'Airtime Recharge',
-      status: 'Pending',
-      amount: '20,000',
-      date: '05 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-      isPending: true,
-    },
-  ];
+  // Date filter state
+  const [dateRange, setDateRange] = useState<{ start_date?: string; end_date?: string }>({});
 
-  const billPaymentTransactions = [
-    {
-      id: '1',
-      type: 'Airtime Recharge',
-      billerType: 'MTN',
-      phoneNumber: '07033484845',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      category: 'Airtime',
-      iconSource: require('../../assets/airtime.png'),
-    },
-    {
-      id: '2',
-      type: 'Airtime Recharge',
-      billerType: 'MTN',
-      phoneNumber: '07033484845',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      category: 'Airtime',
-      iconSource: require('../../assets/airtime.png'),
-    },
-    {
-      id: '3',
-      type: 'Airtime Recharge',
-      billerType: 'MTN',
-      phoneNumber: '07033484845',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      category: 'Airtime',
-      iconSource: require('../../assets/airtime.png'),
-    },
-    {
-      id: '4',
-      type: 'Betting',
-      billerType: 'Bet9ja',
-      userID: '123466789988',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      category: 'Betting',
-      iconSource: require('../../assets/betting (2).png'),
-    },
-    {
-      id: '5',
-      type: 'Cable TV',
-      billerType: 'DStv',
-      decoderNumber: '123456789',
-      planType: 'DStv Yanga',
-      accountName: 'Qamardeen Abdulmalik',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      category: 'Cable TV',
-      iconSource: require('../../assets/cable (2).png'),
-    },
-    {
-      id: '6',
-      type: 'Data Recharge',
-      billerType: 'MTN',
-      phoneNumber: '07033484845',
-      dataPlan: '1 GIG for 1 month',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      category: 'Data',
-      iconSource: require('../../assets/datarecharge.png'),
-    },
-    {
-      id: '7',
-      type: 'Data Recharge',
-      billerType: 'MTN',
-      phoneNumber: '07033484845',
-      dataPlan: '1 GIG for 1 month',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      category: 'Data',
-      iconSource: require('../../assets/datarecharge.png'),
-    },
-    {
-      id: '8',
-      type: 'Data Recharge',
-      billerType: 'MTN',
-      phoneNumber: '07033484845',
-      dataPlan: '1 GIG for 1 month',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      category: 'Data',
-      iconSource: require('../../assets/datarecharge.png'),
-    },
-    {
-      id: '9',
-      type: 'Electricity Recharge',
-      billerType: 'Ikeja Electricity',
-      meterNumber: '123466789988',
-      accountType: 'Prepaid',
-      accountName: 'Qamardeen Abdulmalik',
-      token: '1234 - 4567 - 1245 - 12345',
-      status: 'Pending',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      category: 'Electricity',
-      iconSource: require('../../assets/electricity.png'),
-      isPending: true,
-    },
-  ];
+  // Helper function to get date range
+  const getDateRange = (filter: string) => {
+    const today = new Date();
+    const formatDate = (date: Date) => date.toISOString().split('T')[0];
+    
+    switch (filter) {
+      case 'Today':
+        return {
+          start_date: formatDate(today),
+          end_date: formatDate(today),
+        };
+      case 'This Week':
+        const weekStart = new Date(today);
+        weekStart.setDate(today.getDate() - today.getDay());
+        return {
+          start_date: formatDate(weekStart),
+          end_date: formatDate(today),
+        };
+      case 'This Month':
+        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        return {
+          start_date: formatDate(monthStart),
+          end_date: formatDate(today),
+        };
+      default:
+        return {};
+    }
+  };
 
-  const cryptoTransactions = [
-    {
-      id: '1',
-      type: 'Crypto Deposit - BTC',
-      cryptoType: 'Receive',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      cryptoAmount: '0.0023 BTC',
-      network: 'Bitcoin',
-      iconSource: require('../../assets/sent (1).png'),
-    },
-    {
-      id: '2',
-      type: 'Crypto Withdrawal - BTC',
-      cryptoType: 'Send',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      cryptoAmount: '0.0023 BTC',
-      network: 'Bitcoin',
-      iconSource: require('../../assets/sent (2).png'),
-    },
-    {
-      id: '3',
-      type: 'Crypto Buy - BTC',
-      cryptoType: 'Buy',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      cryptoAmount: '0.0023 BTC',
-      network: 'Bitcoin',
-      iconSource: require('../../assets/sell (2).png'),
-    },
-    {
-      id: '4',
-      type: 'Crypto Sell - BTC',
-      cryptoType: 'Sell',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      cryptoAmount: '0.0023 BTC',
-      network: 'Bitcoin',
-      iconSource: require('../../assets/sell (1).png'),
-    },
-    {
-      id: '5',
-      type: 'Crypto Sell - BTC',
-      cryptoType: 'Sell',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      cryptoAmount: '0.0023 BTC',
-      network: 'Bitcoin',
-      iconSource: require('../../assets/sell (1).png'),
-    },
-    {
-      id: '6',
-      type: 'Crypto Sell - BTC',
-      cryptoType: 'Sell',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      cryptoAmount: '0.0023 BTC',
-      network: 'Bitcoin',
-      iconSource: require('../../assets/sell (1).png'),
-    },
-    {
-      id: '7',
-      type: 'Crypto Sell - BTC',
-      cryptoType: 'Sell',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      cryptoAmount: '0.0023 BTC',
-      network: 'Bitcoin',
-      iconSource: require('../../assets/sell (1).png'),
-    },
-    {
-      id: '8',
-      type: 'Crypto Sell - BTC',
-      cryptoType: 'Sell',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      cryptoAmount: '0.0023 BTC',
-      network: 'Bitcoin',
-      iconSource: require('../../assets/sell (1).png'),
-    },
-    {
-      id: '9',
-      type: 'Crypto Sell - BTC',
-      cryptoType: 'Sell',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      cryptoAmount: '0.0023 BTC',
-      network: 'Bitcoin',
-      iconSource: require('../../assets/sell (1).png'),
-    },
-  ];
+  // Map UI categories to API categories
+  const mapBillCategoryToAPI = (category: BillPaymentCategory): string | undefined => {
+    const map: Record<string, string> = {
+      'Airtime': 'airtime',
+      'Data': 'data',
+      'Cable TV': 'cable_tv',
+      'Electricity': 'electricity',
+      'Internet': 'internet',
+      'Betting': 'betting',
+    };
+    return category === 'All' ? undefined : map[category];
+  };
 
-  const virtualCardTransactions = [
-    {
-      id: '1',
-      type: 'Card Funding',
-      virtualCardType: 'Fund',
-      status: 'Successful',
-      amount: '$5',
-      date: '06 Oct, 25 - 08:00 PM',
-      iconSource: require('../../assets/sent (1).png'),
-    },
-    {
-      id: '2',
-      type: 'Card Funding',
-      virtualCardType: 'Fund',
-      status: 'Successful',
-      amount: '$5',
-      date: '06 Oct, 25 - 08:00 PM',
-      iconSource: require('../../assets/sent (1).png'),
-    },
-    {
-      id: '3',
-      type: 'Card Funding',
-      virtualCardType: 'Fund',
-      status: 'Successful',
-      amount: '$5',
-      date: '06 Oct, 25 - 08:00 PM',
-      iconSource: require('../../assets/sent (1).png'),
-    },
-    {
-      id: '4',
-      type: 'Card Funding',
-      virtualCardType: 'Fund',
-      status: 'Successful',
-      amount: '$5',
-      date: '06 Oct, 25 - 08:00 PM',
-      iconSource: require('../../assets/sent (1).png'),
-    },
-    {
-      id: '5',
-      type: 'Card Withdrawal',
-      virtualCardType: 'Withdraw',
-      status: 'Successful',
-      amount: '$5',
-      date: '06 Oct, 25 - 08:00 PM',
-      iconSource: require('../../assets/sent (2).png'),
-    },
-    {
-      id: '6',
-      type: 'Card Withdrawal',
-      virtualCardType: 'Withdraw',
-      status: 'Successful',
-      amount: '$5',
-      date: '06 Oct, 25 - 08:00 PM',
-      iconSource: require('../../assets/sent (2).png'),
-    },
-    {
-      id: '7',
-      type: 'Card Withdrawal',
-      virtualCardType: 'Withdraw',
-      status: 'Successful',
-      amount: '$5',
-      date: '06 Oct, 25 - 06:00 PM',
-      iconSource: require('../../assets/sent (2).png'),
-    },
-    {
-      id: '8',
-      type: 'Card Payment - Paypal',
-      virtualCardType: 'Payments',
-      status: 'Successful',
-      amount: '$5',
-      date: '06 Oct, 25 - 08:00 PM',
-      paymentReason: 'Paypal',
-      iconSource: require('../../assets/card.png'),
-    },
-    {
-      id: '9',
-      type: 'Card Payment - Paypal',
-      virtualCardType: 'Payments',
-      status: 'Successful',
-      amount: '$5',
-      date: '06 Oct, 25 - 08:00 PM',
-      paymentReason: 'Paypal',
-      iconSource: require('../../assets/card.png'),
-    },
-  ];
+  // Map crypto category to transaction type
+  const mapCryptoCategoryToType = (category: CryptoCategory): string | undefined => {
+    const map: Record<string, string> = {
+      'Receive': 'crypto_buy',
+      'Send': 'crypto_withdrawal',
+      'Buy': 'crypto_buy',
+      'Sell': 'crypto_sell',
+    };
+    return category === 'All Transactions' ? undefined : map[category];
+  };
 
-  // Filter transactions based on selected filter
-  const getFilteredTransactions = () => {
+  // Map virtual card category to transaction type
+  const mapVirtualCardCategoryToType = (category: VirtualCardCategory): string | undefined => {
+    const map: Record<string, string> = {
+      'Fund': 'card_funding',
+      'Withdraw': 'card_withdrawal',
+      'Payments': 'card_withdrawal', // Payments are also withdrawals
+    };
+    return category === 'All Transactions' ? undefined : map[category];
+  };
+
+  // API calls based on selected filter
+  const allTransactionsFilters = useMemo(() => {
+    const filters: any = {
+      limit: 100,
+    };
+    
+    // Use wallet_type from route params if provided, otherwise use selected filter
+    if (walletType) {
+      filters.wallet_type = walletType;
+    } else if (selectedFilter === 'Crypto') {
+      filters.wallet_type = 'crypto';
+      const type = mapCryptoCategoryToType(selectedCryptoCategory);
+      if (type) filters.type = type;
+    } else if (selectedFilter === 'Virtual Cards') {
+      filters.wallet_type = 'virtual_card';
+      const type = mapVirtualCardCategoryToType(selectedVirtualCardCategory);
+      if (type) filters.type = type;
+    } else if (selectedFilter === 'All Transactions') {
+      // No additional filters for all transactions
+    }
+    
+    // Add date filters
+    if (dateRange.start_date) filters.start_date = dateRange.start_date;
+    if (dateRange.end_date) filters.end_date = dateRange.end_date;
+    
+    return filters;
+  }, [selectedFilter, selectedCryptoCategory, selectedVirtualCardCategory, dateRange, walletType]);
+
+  const billPaymentFilters = useMemo(() => {
+    const filters: any = {
+      limit: 100,
+    };
+    
+    const category = mapBillCategoryToAPI(selectedBillCategory);
+    if (category) filters.category = category;
+    
+    // Add date filters
+    if (dateRange.start_date) filters.start_date = dateRange.start_date;
+    if (dateRange.end_date) filters.end_date = dateRange.end_date;
+    
+    return filters;
+  }, [selectedBillCategory, dateRange]);
+
+  // API hooks
+  const { 
+    data: allTransactionsData, 
+    isLoading: isLoadingAll,
+    error: errorAll,
+    refetch: refetchAll
+  } = useAllTransactions(selectedFilter !== 'Bill Payments' ? allTransactionsFilters : undefined);
+
+  const { 
+    data: billPaymentData, 
+    isLoading: isLoadingBill,
+    error: errorBill,
+    refetch: refetchBill
+  } = useBillPaymentTransactions(selectedFilter === 'Bill Payments' ? billPaymentFilters : undefined);
+
+  // Helper functions for formatting
+  const formatDate = (dateString: string): string => {
+    try {
+      const date = new Date(dateString);
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = date.toLocaleString('en-US', { month: 'short' });
+      const year = date.getFullYear().toString().slice(-2);
+      const hours = date.getHours();
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const displayHours = hours % 12 || 12;
+      return `${day} ${month}, ${year} - ${displayHours}:${minutes} ${ampm}`;
+    } catch {
+      return dateString;
+    }
+  };
+
+  const formatCurrency = (amount: number, currency: string): string => {
+    if (currency === 'NGN') {
+      return `₦${amount.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    } else if (currency === 'USD') {
+      return `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    return `${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
+  };
+
+  const mapStatus = (status: string): string => {
+    const statusMap: Record<string, string> = {
+      'completed': 'Successful',
+      'pending': 'Pending',
+      'failed': 'Failed',
+      'cancelled': 'Cancelled',
+    };
+    return statusMap[status] || status;
+  };
+
+  const getTransactionTypeLabel = (type: string, category?: string): string => {
+    if (type === 'deposit') return 'Funds Deposit';
+    if (type === 'withdrawal') return 'Funds Withdrawal';
+    if (type === 'bill_payment') {
+      if (category === 'airtime') return 'Airtime Recharge';
+      if (category === 'data') return 'Data Recharge';
+      if (category === 'electricity') return 'Electricity Recharge';
+      if (category === 'cable_tv') return 'Cable TV';
+      if (category === 'internet') return 'Internet Subscription';
+      if (category === 'betting') return 'Betting';
+      return 'Bill Payment';
+    }
+    if (type === 'crypto_buy') return 'Crypto Buy';
+    if (type === 'crypto_sell') return 'Crypto Sell';
+    if (type === 'crypto_withdrawal') return 'Crypto Withdrawal';
+    if (type === 'card_funding') return 'Card Funding';
+    if (type === 'card_withdrawal') return 'Card Withdrawal';
+    return type;
+  };
+
+  const getBillPaymentIcon = (category?: string) => {
+    const icons: Record<string, any> = {
+      'airtime': require('../../assets/airtime.png'),
+      'data': require('../../assets/datarecharge.png'),
+      'cable_tv': require('../../assets/cable (2).png'),
+      'electricity': require('../../assets/electricity.png'),
+      'betting': require('../../assets/betting (2).png'),
+    };
+    return icons[category || ''] || require('../../assets/Money (1).png');
+  };
+
+  // Format transactions for UI
+  const formatTransaction = (tx: any): any => {
+    const isDeposit = tx.type === 'deposit' || tx.type === 'crypto_buy' || tx.type === 'card_funding';
+    const isPending = tx.status === 'pending';
+    
+    return {
+      id: tx.transaction_id || tx.id,
+      transaction_id: tx.transaction_id,
+      type: getTransactionTypeLabel(tx.type, tx.category),
+      status: mapStatus(tx.status),
+      amount: formatCurrency(tx.amount, tx.currency),
+      date: formatDate(tx.created_at),
+      isDeposit,
+      isPending,
+      // Original transaction data for navigation
+      originalData: {
+        ...tx,
+        wallet_type: tx.wallet_type, // Preserve wallet_type
+      },
+    };
+  };
+
+  const formatBillPaymentTransaction = (tx: any): any => {
+    const base = formatTransaction(tx);
+    const metadata = tx.metadata || {};
+    
+    return {
+      ...base,
+      category: tx.category === 'airtime' ? 'Airtime' :
+                tx.category === 'data' ? 'Data' :
+                tx.category === 'cable_tv' ? 'Cable TV' :
+                tx.category === 'electricity' ? 'Electricity' :
+                tx.category === 'internet' ? 'Internet' :
+                tx.category === 'betting' ? 'Betting' : tx.category,
+      phoneNumber: metadata.phoneNumber || metadata.phone_number,
+      billerType: metadata.provider || metadata.billerName,
+      decoderNumber: metadata.decoderNumber || metadata.decoder_number,
+      dataPlan: metadata.planName || metadata.plan_name,
+      accountName: metadata.accountName || metadata.account_name,
+      meterNumber: metadata.meterNumber || metadata.meter_number,
+      accountType: metadata.accountType || metadata.account_type,
+      token: tx.token || metadata.rechargeToken,
+      iconSource: getBillPaymentIcon(tx.category),
+      originalData: {
+        ...base.originalData,
+        wallet_type: tx.wallet_type, // Preserve wallet_type
+      },
+    };
+  };
+
+  const formatCryptoTransaction = (tx: any): any => {
+    const base = formatTransaction(tx);
+    const metadata = tx.metadata || {};
+    
+    let cryptoType = 'Receive';
+    if (tx.type === 'crypto_withdrawal') cryptoType = 'Send';
+    else if (tx.type === 'crypto_buy') cryptoType = 'Buy';
+    else if (tx.type === 'crypto_sell') cryptoType = 'Sell';
+    
+    return {
+      ...base,
+      cryptoType,
+      cryptoAmount: `${tx.amount} ${tx.currency}`,
+      network: metadata.blockchain || tx.currency,
+      iconSource: cryptoType === 'Receive' || cryptoType === 'Buy' 
+        ? require('../../assets/sent (1).png')
+        : require('../../assets/sent (2).png'),
+      originalData: {
+        ...base.originalData,
+        wallet_type: tx.wallet_type || 'crypto', // Preserve wallet_type
+      },
+    };
+  };
+
+  const formatVirtualCardTransaction = (tx: any): any => {
+    const base = formatTransaction(tx);
+    const metadata = tx.metadata || {};
+    
+    let virtualCardType = 'Fund';
+    if (tx.type === 'card_withdrawal') {
+      virtualCardType = metadata.paymentReason ? 'Payments' : 'Withdraw';
+    }
+    
+    // Ensure all original transaction data is preserved
+    const originalData = {
+      ...tx, // Start with all original transaction fields
+      ...base.originalData, // Merge with base originalData
+      wallet_type: tx.wallet_type || 'virtual_card', // Ensure wallet_type is set
+      transaction_id: tx.transaction_id || tx.id, // Ensure transaction_id is set
+      metadata: tx.metadata || {}, // Preserve metadata
+    };
+    
+    return {
+      ...base,
+      virtualCardType,
+      paymentReason: metadata.paymentReason || metadata.merchant_name,
+      iconSource: virtualCardType === 'Fund' 
+        ? require('../../assets/sent (1).png')
+        : virtualCardType === 'Withdraw'
+        ? require('../../assets/sent (2).png')
+        : require('../../assets/card.png'),
+      originalData,
+    };
+  };
+
+  // Get filtered transactions
+  const transactions = useMemo(() => {
     if (selectedFilter === 'Bill Payments') {
-      let filtered = billPaymentTransactions;
+      const data = billPaymentData?.data || [];
+      let filtered = data.map(formatBillPaymentTransaction);
+      
+      // Apply category filter if not 'All'
       if (selectedBillCategory !== 'All') {
-        filtered = filtered.filter(tx => {
-          if (selectedBillCategory === 'Airtime') return tx.category === 'Airtime';
-          if (selectedBillCategory === 'Data') return tx.category === 'Data';
-          if (selectedBillCategory === 'Cable TV') return tx.category === 'Cable TV';
-          if (selectedBillCategory === 'Electricity') return tx.category === 'Electricity';
-          if (selectedBillCategory === 'Internet') return tx.category === 'Internet';
-          if (selectedBillCategory === 'Betting') return tx.category === 'Betting';
-          return true;
-        });
+        filtered = filtered.filter((tx: any) => tx.category === selectedBillCategory);
       }
+      
       return filtered;
     }
+    
     if (selectedFilter === 'Crypto') {
-      let filtered = cryptoTransactions;
+      const data = allTransactionsData?.data || [];
+      let filtered = data.map(formatCryptoTransaction);
+      
+      // Apply crypto category filter
       if (selectedCryptoCategory !== 'All Transactions') {
-        filtered = filtered.filter(tx => {
-          if (selectedCryptoCategory === 'Receive') return tx.cryptoType === 'Receive';
-          if (selectedCryptoCategory === 'Send') return tx.cryptoType === 'Send';
-          if (selectedCryptoCategory === 'Buy') return tx.cryptoType === 'Buy';
-          if (selectedCryptoCategory === 'Sell') return tx.cryptoType === 'Sell';
-          return true;
-        });
+        filtered = filtered.filter((tx: any) => tx.cryptoType === selectedCryptoCategory);
       }
+      
       return filtered;
     }
+    
     if (selectedFilter === 'Virtual Cards') {
-      let filtered = virtualCardTransactions;
+      const data = allTransactionsData?.data || [];
+      let filtered = data.map(formatVirtualCardTransaction);
+      
+      // Apply virtual card category filter
       if (selectedVirtualCardCategory !== 'All Transactions') {
-        filtered = filtered.filter(tx => {
+        filtered = filtered.filter((tx: any) => {
           if (selectedVirtualCardCategory === 'Fund') return tx.virtualCardType === 'Fund';
           if (selectedVirtualCardCategory === 'Withdraw') return tx.virtualCardType === 'Withdraw';
           if (selectedVirtualCardCategory === 'Payments') return tx.virtualCardType === 'Payments';
           return true;
         });
       }
+      
       return filtered;
     }
-    return allTransactions;
+    
+    // All Transactions
+    const data = allTransactionsData?.data || [];
+    return data.map(formatTransaction);
+  }, [
+    selectedFilter,
+    selectedBillCategory,
+    selectedCryptoCategory,
+    selectedVirtualCardCategory,
+    allTransactionsData,
+    billPaymentData,
+  ]);
+
+  // Loading state
+  const isLoading = isLoadingAll || isLoadingBill;
+  const error = errorAll || errorBill;
+
+  // Handle refresh
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        refetchAll(),
+        refetchBill(),
+      ]);
+    } catch (err) {
+      console.error('Refresh error:', err);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
-  const transactions = getFilteredTransactions();
+  // Handle date filter selection
+  const handleDateFilter = (filter: string) => {
+    setSelectedDateFilter(filter);
+    setShowDateDropdown(false);
+    
+    if (filter === 'Custom Range') {
+      // TODO: Implement custom date picker
+      Alert.alert('Custom Range', 'Custom date range picker will be implemented');
+      return;
+    }
+    
+    const range = getDateRange(filter);
+    setDateRange(range);
+  };
+
+  // Show loading state
+  if (isLoading && transactions.length === 0) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <StatusBar style="dark" />
+        <ActivityIndicator size="large" color="#1B800F" />
+        <ThemedText style={{ marginTop: 16, color: '#6B7280' }}>Loading transactions...</ThemedText>
+      </View>
+    );
+  }
+
+  // Show error state
+  if (error && transactions.length === 0) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 20 }]}>
+        <StatusBar style="dark" />
+        <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+        <ThemedText style={{ marginTop: 16, color: '#EF4444', textAlign: 'center' }}>
+          Failed to load transactions
+        </ThemedText>
+        <ThemedText style={{ marginTop: 8, color: '#6B7280', textAlign: 'center', fontSize: 12 }}>
+          {(error as any)?.response?.data?.message || 'Please try again later'}
+        </ThemedText>
+        <TouchableOpacity
+          style={[styles.backButton, { marginTop: 20 }]}
+          onPress={handleRefresh}
+        >
+          <ThemedText style={{ color: '#1B800F' }}>Retry</ThemedText>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -497,6 +508,13 @@ const AllTransactionsScreen = () => {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#1B800F"
+          />
+        }
       >
         {/* Main Title */}
         <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
@@ -557,35 +575,71 @@ const AllTransactionsScreen = () => {
 
         {/* Transaction List */}
         <View style={styles.transactionList}>
-          {transactions.map((transaction: any) => (
-            <TouchableOpacity
-              key={transaction.id}
-              style={styles.transactionItem}
-              onPress={() => {
-                if (selectedFilter === 'Bill Payments') {
-                  navigation.navigate('TransactionHistory', {
-                    type: 'bill_payment',
-                    transactionData: transaction,
-                  });
-                } else if (selectedFilter === 'Crypto') {
-                  navigation.navigate('TransactionHistory', {
-                    type: 'crypto',
-                    transactionData: transaction,
-                  });
-                } else if (selectedFilter === 'Virtual Cards') {
-                  navigation.navigate('TransactionHistory', {
-                    type: 'virtual_card',
-                    transactionData: transaction,
-                  });
-                } else {
-                  navigation.navigate('TransactionHistory', {
-                    type: transaction.isDeposit ? 'deposit' : 'withdraw',
-                    transactionData: transaction,
-                  });
-                }
-              }}
-              activeOpacity={0.8}
-            >
+          {transactions.length === 0 ? (
+            <View style={styles.emptyState}>
+              <ThemedText style={styles.emptyStateText}>No transactions found</ThemedText>
+              <ThemedText style={styles.emptyStateSubtext}>
+                {selectedDateFilter ? 'Try adjusting your date filter' : 'Your transaction history will appear here'}
+              </ThemedText>
+            </View>
+          ) : (
+            transactions.map((transaction: any) => (
+              <TouchableOpacity
+                key={transaction.id}
+                style={styles.transactionItem}
+                onPress={() => {
+                  if (selectedFilter === 'Bill Payments') {
+                    navigation.navigate('TransactionHistory', {
+                      type: 'bill_payment',
+                      transactionData: {
+                        ...(transaction.originalData || transaction),
+                        transaction_id: transaction.transaction_id,
+                      },
+                    });
+                  } else if (selectedFilter === 'Crypto') {
+                    navigation.navigate('TransactionHistory', {
+                      type: 'crypto',
+                      transactionData: {
+                        ...(transaction.originalData || transaction),
+                        transaction_id: transaction.transaction_id,
+                      },
+                    });
+                  } else if (selectedFilter === 'Virtual Cards') {
+                    // Log the transaction data being passed
+                    const transactionDataToPass = {
+                      ...(transaction.originalData || transaction),
+                      transaction_id: transaction.transaction_id || transaction.id,
+                      wallet_type: 'virtual_card', // Mark as virtual card transaction
+                    };
+                    
+                    console.log('🔵 Virtual Card Transaction - Navigating with data:', {
+                      transaction_id: transactionDataToPass.transaction_id,
+                      id: transactionDataToPass.id,
+                      type: transactionDataToPass.type,
+                      wallet_type: transactionDataToPass.wallet_type,
+                      amount: transactionDataToPass.amount,
+                      currency: transactionDataToPass.currency,
+                      status: transactionDataToPass.status,
+                      metadata: transactionDataToPass.metadata,
+                      fullData: transactionDataToPass,
+                    });
+                    
+                    navigation.navigate('TransactionHistory', {
+                      type: 'virtual_card',
+                      transactionData: transactionDataToPass,
+                    });
+                  } else {
+                    navigation.navigate('TransactionHistory', {
+                      type: transaction.isDeposit ? 'deposit' : 'withdraw',
+                      transactionData: {
+                        ...(transaction.originalData || transaction),
+                        transaction_id: transaction.transaction_id,
+                      },
+                    });
+                  }
+                }}
+                activeOpacity={0.8}
+              >
               <View
                 style={[
                   styles.transactionIcon,
@@ -643,7 +697,8 @@ const AllTransactionsScreen = () => {
                 <ThemedText style={styles.transactionDate}>{transaction.date}</ThemedText>
               </View>
             </TouchableOpacity>
-          ))}
+            ))
+          )}
         </View>
       </ScrollView>
 
@@ -864,40 +919,45 @@ const AllTransactionsScreen = () => {
           >
             <TouchableOpacity
               style={styles.dropdownItem}
-              onPress={() => {
-                setShowDateDropdown(false);
-              }}
+              onPress={() => handleDateFilter('Today')}
               activeOpacity={0.8}
             >
               <ThemedText style={styles.dropdownItemText}>Today</ThemedText>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.dropdownItem}
-              onPress={() => {
-                setShowDateDropdown(false);
-              }}
+              onPress={() => handleDateFilter('This Week')}
               activeOpacity={0.8}
             >
               <ThemedText style={styles.dropdownItemText}>This Week</ThemedText>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.dropdownItem}
-              onPress={() => {
-                setShowDateDropdown(false);
-              }}
+              onPress={() => handleDateFilter('This Month')}
               activeOpacity={0.8}
             >
               <ThemedText style={styles.dropdownItemText}>This Month</ThemedText>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.dropdownItem}
-              onPress={() => {
-                setShowDateDropdown(false);
-              }}
+              onPress={() => handleDateFilter('Custom Range')}
               activeOpacity={0.8}
             >
               <ThemedText style={styles.dropdownItemText}>Custom Range</ThemedText>
             </TouchableOpacity>
+            {selectedDateFilter && (
+              <TouchableOpacity
+                style={styles.dropdownItem}
+                onPress={() => {
+                  setSelectedDateFilter('');
+                  setDateRange({});
+                  setShowDateDropdown(false);
+                }}
+                activeOpacity={0.8}
+              >
+                <ThemedText style={[styles.dropdownItemText, { color: '#EF4444' }]}>Clear Filter</ThemedText>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       )}
@@ -1118,6 +1178,22 @@ const styles = StyleSheet.create({
   dropdownItemText: {
     fontSize: 14,
     color: '#111827',
+  },
+  emptyState: {
+    paddingVertical: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyStateText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  emptyStateSubtext: {
+    fontSize: 12,
+    color: '#6B7280',
+    textAlign: 'center',
   },
 });
 

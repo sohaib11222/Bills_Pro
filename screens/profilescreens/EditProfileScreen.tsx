@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -9,13 +9,19 @@ import {
     Dimensions,
     Platform,
     StatusBar as RNStatusBar,
+    ActivityIndicator,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useUserProfile } from '../../queries/userQueries';
+import { useUpdateProfile } from '../../mutations/userMutations';
+import { getProfileImage, setProfileImage } from '../../services/storage/appStorage';
 
 const { width } = Dimensions.get('window');
 
@@ -23,10 +29,130 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const EditProfileScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
-    const [firstName, setFirstName] = useState('Abdul Malik');
-    const [lastName, setLastName] = useState('Qamardeen');
-    const [email, setEmail] = useState('qamardeenoladimeji@gmail.com');
-    const [phone, setPhone] = useState('070123456767');
+    const { data, isLoading: isLoadingProfile } = useUserProfile();
+    const updateProfileMutation = useUpdateProfile();
+
+    const user = data?.data?.user;
+
+    const [firstName, setFirstName] = useState('');
+    const [lastName, setLastName] = useState('');
+    const [email, setEmail] = useState('');
+    const [phone, setPhone] = useState('');
+    const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
+
+    // Load profile image and user data when component mounts
+    useEffect(() => {
+        const loadProfileImage = async () => {
+            const storedImage = await getProfileImage();
+            if (storedImage) {
+                setProfileImageUri(storedImage);
+            }
+        };
+        loadProfileImage();
+    }, []);
+
+    // Populate form with user data when loaded
+    useEffect(() => {
+        if (user) {
+            setFirstName(user.first_name || '');
+            setLastName(user.last_name || '');
+            setEmail(user.email || '');
+            setPhone(user.phone_number || '');
+        }
+    }, [user]);
+
+    // Reload profile image when screen comes into focus
+    useEffect(() => {
+        const unsubscribe = navigation.addListener('focus', async () => {
+            const storedImage = await getProfileImage();
+            if (storedImage) {
+                setProfileImageUri(storedImage);
+            }
+        });
+        return unsubscribe;
+    }, [navigation]);
+
+    const handleImagePicker = async () => {
+        try {
+            // Request permission
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert('Permission Denied', 'We need camera roll permissions to change your profile picture.');
+                return;
+            }
+
+            // Launch image picker
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.8,
+            });
+
+            if (!result.canceled && result.assets[0]) {
+                const imageUri = result.assets[0].uri;
+                setProfileImageUri(imageUri);
+                await setProfileImage(imageUri);
+                Alert.alert('Success', 'Profile picture updated successfully');
+            }
+        } catch (error) {
+            console.error('Error picking image:', error);
+            Alert.alert('Error', 'Failed to pick image. Please try again.');
+        }
+    };
+
+    const handleSave = async () => {
+        // Validate required fields
+        if (!firstName.trim() || !lastName.trim()) {
+            Alert.alert('Validation Error', 'First name and last name are required');
+            return;
+        }
+
+        try {
+            const updateData: {
+                first_name?: string;
+                last_name?: string;
+                phone_number?: string;
+            } = {};
+
+            if (firstName.trim() !== user?.first_name) {
+                updateData.first_name = firstName.trim();
+            }
+            if (lastName.trim() !== user?.last_name) {
+                updateData.last_name = lastName.trim();
+            }
+            if (phone.trim() !== user?.phone_number) {
+                updateData.phone_number = phone.trim();
+            }
+
+            // Only update if there are changes
+            if (Object.keys(updateData).length === 0) {
+                Alert.alert('No Changes', 'No changes to save');
+                navigation.goBack();
+                return;
+            }
+
+            await updateProfileMutation.mutateAsync(updateData);
+            
+            Alert.alert('Success', 'Profile updated successfully', [
+                { text: 'OK', onPress: () => navigation.goBack() }
+            ]);
+        } catch (error: any) {
+            const errorMessage = error?.response?.data?.message || 
+                                error?.response?.data?.errors?.phone_number?.[0] ||
+                                error?.message || 
+                                'Failed to update profile';
+            Alert.alert('Error', errorMessage);
+        }
+    };
+
+    if (isLoadingProfile) {
+        return (
+            <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+                <ActivityIndicator size="large" color="#42AC36" />
+            </View>
+        );
+    }
 
     return (
         <View style={styles.container}>
@@ -54,13 +180,14 @@ const EditProfileScreen = () => {
                 <View style={styles.profilePictureSection}>
                     <View style={styles.avatarContainer}>
                         <Image
-                            source={require('../../assets/dummy_avatar.png')}
+                            source={profileImageUri ? { uri: profileImageUri } : require('../../assets/dummy_avatar.png')}
                             style={styles.avatar}
                             resizeMode="cover"
                         />
                         <TouchableOpacity
                             style={styles.editAvatarButton}
                             activeOpacity={0.7}
+                            onPress={handleImagePicker}
                         >
                             <Image
                                 source={require('../../assets/Vector (56).png')}
@@ -95,14 +222,17 @@ const EditProfileScreen = () => {
 
                     <View style={styles.inputContainer}>
                         <TextInput
-                            style={styles.input}
+                            style={[styles.input, { backgroundColor: '#D1D5DB' }]}
                             value={email}
-                            onChangeText={setEmail}
+                            editable={false}
                             placeholder="Email"
                             placeholderTextColor="#9CA3AF"
                             keyboardType="email-address"
                             autoCapitalize="none"
                         />
+                        <ThemedText style={{ fontSize: 10, color: '#9CA3AF', marginTop: 4, marginLeft: 4 }}>
+                            Email cannot be changed
+                        </ThemedText>
                     </View>
 
                     <View style={styles.inputContainer}>
@@ -121,14 +251,19 @@ const EditProfileScreen = () => {
             {/* Save Changes Button */}
             <View style={styles.buttonContainer}>
                 <TouchableOpacity
-                    style={styles.saveButton}
+                    style={[
+                        styles.saveButton,
+                        updateProfileMutation.isPending && { opacity: 0.6 }
+                    ]}
                     activeOpacity={0.8}
-                    onPress={() => {
-                        // Handle save changes
-                        navigation.goBack();
-                    }}
+                    onPress={handleSave}
+                    disabled={updateProfileMutation.isPending}
                 >
-                    <ThemedText style={styles.saveButtonText}>Save Changes</ThemedText>
+                    {updateProfileMutation.isPending ? (
+                        <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                        <ThemedText style={styles.saveButtonText}>Save Changes</ThemedText>
+                    )}
                 </TouchableOpacity>
             </View>
         </View>

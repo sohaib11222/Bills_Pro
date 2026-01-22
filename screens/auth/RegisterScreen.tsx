@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Linking } from 'react-native';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Linking, Alert, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useRegister } from '../../mutations/authMutations';
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList>;
 
@@ -19,6 +20,78 @@ const RegisterScreen = () => {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const registerMutation = useRegister();
+
+  const validateForm = () => {
+    if (!firstName.trim()) {
+      Alert.alert('Validation Error', 'Please enter your first name');
+      return false;
+    }
+
+    if (!lastName.trim()) {
+      Alert.alert('Validation Error', 'Please enter your last name');
+      return false;
+    }
+
+    if (!email.trim()) {
+      Alert.alert('Validation Error', 'Please enter your email address');
+      return false;
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      Alert.alert('Validation Error', 'Please enter a valid email address');
+      return false;
+    }
+
+    if (!password.trim()) {
+      Alert.alert('Validation Error', 'Please enter a password');
+      return false;
+    }
+
+    if (password.length < 6) {
+      Alert.alert('Validation Error', 'Password must be at least 6 characters long');
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleRegister = async () => {
+    if (!validateForm()) {
+      return;
+    }
+
+    try {
+      const result = await registerMutation.mutateAsync({
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        email: email.trim(),
+        password: password,
+        phone_number: phoneNumber.trim() || undefined,
+        country_code: 'NG', // Default to Nigeria, can be made dynamic
+      });
+
+      if (result.success) {
+        // Navigate to verify screen with email
+        navigation.navigate('Verify', { email: email.trim() });
+      } else {
+        Alert.alert('Registration Failed', result.message || 'An error occurred during registration. Please try again.');
+      }
+    } catch (error: any) {
+      // Handle validation errors from backend
+      if (error?.data?.errors) {
+        const errorMessages = Object.values(error.data.errors).flat().join('\n');
+        Alert.alert('Registration Failed', errorMessages);
+      } else {
+        Alert.alert(
+          'Registration Failed',
+          error?.message || error?.data?.message || 'An error occurred. Please try again.'
+        );
+      }
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -73,10 +146,10 @@ const RegisterScreen = () => {
             />
           </View>
 
-          {/* Email Input with Verify Button */}
+          {/* Email Input */}
           <View style={styles.inputContainer}>
             <TextInput
-              style={[styles.input, { flex: 1 }]}
+              style={styles.input}
               placeholder="Email Address"
               placeholderTextColor="rgba(0, 0, 0, 0.5)"
               value={email}
@@ -84,14 +157,6 @@ const RegisterScreen = () => {
               keyboardType="email-address"
               autoCapitalize="none"
             />
-            {email.length > 0 && (
-              <TouchableOpacity 
-                style={styles.verifyButton}
-                onPress={() => navigation.navigate('Verify')}
-              >
-                <ThemedText style={styles.verifyButtonText}>Verify</ThemedText>
-              </TouchableOpacity>
-            )}
           </View>
 
           {/* Phone Number Input */}
@@ -132,10 +197,15 @@ const RegisterScreen = () => {
 
           {/* Register Button */}
           <TouchableOpacity 
-            style={styles.registerButton}
-            onPress={() => navigation.navigate('Verify')}
+            style={[styles.registerButton, registerMutation.isPending && styles.registerButtonDisabled]}
+            onPress={handleRegister}
+            disabled={registerMutation.isPending}
           >
-            <ThemedText style={styles.registerButtonText}>Register</ThemedText>
+            {registerMutation.isPending ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <ThemedText style={styles.registerButtonText}>Register</ThemedText>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -290,6 +360,9 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  registerButtonDisabled: {
+    opacity: 0.6,
   },
   legalContainer: {
     position: 'absolute',

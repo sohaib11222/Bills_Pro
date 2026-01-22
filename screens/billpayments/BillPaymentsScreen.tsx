@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -7,6 +7,8 @@ import {
   Dimensions,
   ScrollView,
   TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +16,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useBillPaymentTransactions } from '../../queries/transactionQueries';
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -21,6 +24,136 @@ const { width, height } = Dimensions.get('window');
 
 const BillPaymentsScreen = () => {
   const navigation = useNavigation<RootNavigationProp>();
+  const [refreshing, setRefreshing] = React.useState(false);
+
+  // Fetch recent bill payment transactions
+  const { 
+    data: billPaymentData, 
+    isLoading, 
+    error,
+    refetch 
+  } = useBillPaymentTransactions({ limit: 10 });
+
+  // Handle refresh
+  const handleRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
+
+  // Helper function to get bill payment icon based on category
+  const getBillPaymentIcon = (category?: string) => {
+    switch (category) {
+      case 'airtime':
+        return require('../../assets/airtime.png');
+      case 'data':
+        return require('../../assets/datarecharge.png');
+      case 'cable_tv':
+        return require('../../assets/cable (2).png');
+      case 'electricity':
+        return require('../../assets/electricity.png');
+      case 'internet':
+        return require('../../assets/global.png');
+      case 'betting':
+        return require('../../assets/betting (2).png');
+      default:
+        return require('../../assets/airtime.png');
+    }
+  };
+
+  // Helper function to get bill payment name
+  const getBillPaymentName = (category?: string) => {
+    switch (category) {
+      case 'airtime':
+        return 'Airtime Recharge';
+      case 'data':
+        return 'Data Recharge';
+      case 'cable_tv':
+        return 'Cable TV';
+      case 'electricity':
+        return 'Electricity Recharge';
+      case 'internet':
+        return 'Internet Subscription';
+      case 'betting':
+        return 'Betting';
+      default:
+        return 'Bill Payment';
+    }
+  };
+
+  // Format date
+  const formatDate = (dateString?: string): string => {
+    if (!dateString) return '06 Oct, 25 - 08:00 PM';
+    try {
+      const date = new Date(dateString);
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = date.toLocaleString('en-US', { month: 'short' });
+      const year = date.getFullYear().toString().slice(-2);
+      const hours = date.getHours();
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const displayHours = hours % 12 || 12;
+      return `${day} ${month}, ${year} - ${displayHours}:${minutes} ${ampm}`;
+    } catch {
+      return dateString;
+    }
+  };
+
+  // Format currency
+  const formatCurrency = (amount: number, currency: string = 'NGN'): string => {
+    if (currency === 'NGN') {
+      return `₦${amount.toLocaleString('en-NG', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    }
+    return `${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
+  };
+
+  // Map status
+  const mapStatus = (status: string): string => {
+    const statusMap: Record<string, string> = {
+      'completed': 'Successful',
+      'pending': 'Pending',
+      'failed': 'Failed',
+      'cancelled': 'Cancelled',
+    };
+    return statusMap[status] || status;
+  };
+
+  // Format transactions for display
+  const recentTransactions = useMemo(() => {
+    if (!billPaymentData?.data) return [];
+
+    return billPaymentData.data.slice(0, 5).map((tx: any) => {
+      const metadata = tx.metadata || {};
+      const status = mapStatus(tx.status);
+      const isPending = tx.status === 'pending';
+      
+      // Build status text with additional info
+      let statusText = status;
+      if (tx.category === 'airtime' || tx.category === 'data') {
+        const phoneNumber = metadata.phoneNumber || metadata.phone_number;
+        if (phoneNumber) {
+          statusText = `${status} - ${phoneNumber}`;
+        }
+      } else if (tx.category === 'cable_tv') {
+        const decoderNumber = metadata.decoderNumber || metadata.decoder_number;
+        if (decoderNumber) {
+          statusText = `${status} - ${decoderNumber}`;
+        }
+      }
+
+      return {
+        key: tx.transaction_id || tx.id,
+        name: getBillPaymentName(tx.category),
+        status: statusText,
+        statusColor: isPending ? '#F59E0B' : '#1B800F',
+        amount: formatCurrency(tx.amount, tx.currency),
+        date: formatDate(tx.created_at),
+        iconSource: getBillPaymentIcon(tx.category),
+        isPending,
+        originalData: tx, // Preserve original data for navigation
+      };
+    });
+  }, [billPaymentData]);
 
   return (
     <View style={styles.container}>
@@ -47,6 +180,13 @@ const BillPaymentsScreen = () => {
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor="#1B800F"
+            />
+          }
         >
           {/* Bill category cards */}
           <View style={styles.cardsGrid}>
@@ -136,96 +276,70 @@ const BillPaymentsScreen = () => {
           {/* Recent Transactions */}
           <ThemedText style={styles.recentTitle}>Recent Transactions</ThemedText>
 
-          <View style={styles.transactionsList}>
-            {[
-              {
-                key: 'mtn',
-                name: 'Airtime Recharge',
-                status: 'Successful - 07033484845',
-                statusColor: '#1B800F',
-                amount: '20,000',
-                date: '06 Oct, 25 - 08:00 PM',
-                iconSource: require('../../assets/airtime.png'),
-              },
-              {
-                key: 'bet',
-                name: 'Betting',
-                status: 'Successful',
-                statusColor: '#1B800F',
-                amount: '20,000',
-                date: '06 Oct, 25 - 08:00 PM',
-                iconSource: require('../../assets/betting (2).png'),
-              },
-              {
-                key: 'dstv',
-                name: 'Cable TV',
-                status: 'Successful - 123456789',
-                statusColor: '#1B800F',
-                amount: '20,000',
-                date: '06 Oct, 25 - 08:00 PM',
-                iconSource: require('../../assets/cable (2).png'),
-              },
-              {
-                key: 'glo',
-                name: 'Data Recharge',
-                status: 'Successful - 07033484845',
-                statusColor: '#1B800F',
-                amount: '20,000',
-                date: '06 Oct, 25 - 08:00 PM',
-                iconSource: require('../../assets/datarecharge.png'),
-              },
-              {
-                key: 'ibedc',
-                name: 'Electricity Recharge',
-                status: 'Pending',
-                statusColor: '#F59E0B',
-                amount: '20,000',
-                date: '06 Oct, 25 - 08:00 PM',
-                iconSource: require('../../assets/electricity.png'),
-                isPending: true,
-              },
-            ].map((tx) => (
-              <TouchableOpacity
-                key={tx.key}
-                style={styles.transactionItem}
-                activeOpacity={0.8}
-                onPress={() => {
-                  navigation.navigate('TransactionHistory', {
-                    type: 'bill_payment',
-                    transactionData: tx,
-                  });
-                }}
-              >
-                <View
-                  style={[
-                    styles.transactionIcon,
-                    tx.isPending && styles.transactionIconPending,
-                  ]}
+          {isLoading && recentTransactions.length === 0 ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#1B800F" />
+              <ThemedText style={styles.loadingText}>Loading transactions...</ThemedText>
+            </View>
+          ) : error ? (
+            <View style={styles.errorContainer}>
+              <ThemedText style={styles.errorText}>
+                Failed to load transactions. Pull down to refresh.
+              </ThemedText>
+            </View>
+          ) : recentTransactions.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <ThemedText style={styles.emptyText}>No recent transactions</ThemedText>
+            </View>
+          ) : (
+            <View style={styles.transactionsList}>
+              {recentTransactions.map((tx) => (
+                <TouchableOpacity
+                  key={tx.key}
+                  style={styles.transactionItem}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    navigation.navigate('TransactionHistory', {
+                      type: 'bill_payment',
+                      transactionData: {
+                        ...tx.originalData,
+                        transaction_id: tx.originalData.transaction_id || tx.originalData.id,
+                      },
+                    });
+                  }}
                 >
-                  <Image
-                    source={tx.iconSource}
-                    style={styles.billPaymentIconImage}
-                    resizeMode="contain"
-                  />
-                </View>
-                <View style={styles.transactionContent}>
-                  <ThemedText style={styles.transactionType}>{tx.name}</ThemedText>
-                  <ThemedText
+                  <View
                     style={[
-                      styles.transactionStatus,
-                      tx.isPending && styles.transactionStatusPending,
+                      styles.transactionIcon,
+                      tx.isPending && styles.transactionIconPending,
                     ]}
                   >
-                    {tx.status}
-                  </ThemedText>
-                </View>
-                <View style={styles.transactionRight}>
-                  <ThemedText style={styles.transactionAmount}>{tx.amount}</ThemedText>
-                  <ThemedText style={styles.transactionDate}>{tx.date}</ThemedText>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
+                    <Image
+                      source={tx.iconSource}
+                      style={styles.billPaymentIconImage}
+                      resizeMode="contain"
+                    />
+                  </View>
+                  <View style={styles.transactionContent}>
+                    <ThemedText style={styles.transactionType}>{tx.name}</ThemedText>
+                    <ThemedText
+                      style={[
+                        styles.transactionStatus,
+                        { color: tx.statusColor },
+                        tx.isPending && styles.transactionStatusPending,
+                      ]}
+                    >
+                      {tx.status}
+                    </ThemedText>
+                  </View>
+                  <View style={styles.transactionRight}>
+                    <ThemedText style={styles.transactionAmount}>{tx.amount}</ThemedText>
+                    <ThemedText style={styles.transactionDate}>{tx.date}</ThemedText>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
         </ScrollView>
       </View>
     </View>
@@ -381,6 +495,35 @@ const styles = StyleSheet.create({
   },
   transactionDate: {
     fontSize: 8,
+    color: '#9CA3AF',
+  },
+  loadingContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  errorContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#EF4444',
+    textAlign: 'center',
+  },
+  emptyContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyText: {
+    fontSize: 12,
     color: '#9CA3AF',
   },
 });

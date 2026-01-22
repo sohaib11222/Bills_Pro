@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -10,39 +10,142 @@ import {
   TextInput,
   Modal,
   Pressable,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import ThemedText from '../../components/ThemedText';
+import { useVirtualCardDetails } from '../../queries/virtualCardQueries';
+import { useWithdrawVirtualCard } from '../../mutations/virtualCardMutations';
+import { useWalletBalance } from '../../queries/walletQueries';
 
 const { width } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type WithdrawCardRouteProp = RouteProp<RootStackParamList, 'WithdrawCard'>;
+
+const EXCHANGE_RATE = 1500; // $1 = N1,500
+const WITHDRAWAL_FEE_NGN = 500;
 
 const WithdrawCardScreen = () => {
   const navigation = useNavigation<RootNavigationProp>();
-  const [selectedAmount, setSelectedAmount] = useState<string>('10,000');
+  const route = useRoute<WithdrawCardRouteProp>();
+  const cardId = route.params?.cardId;
+
+  const { data: cardData, isLoading: isLoadingCard } = useVirtualCardDetails(cardId ?? 0);
+  const { data: walletData, isLoading: isLoadingWallet } = useWalletBalance();
+  const withdrawCardMutation = useWithdrawVirtualCard();
+
+  const card = cardData?.data;
+  const cardBalanceUsd = Number(card?.balance || 0);
+
+  const [selectedAmount, setSelectedAmount] = useState<string>('');
   const [withdrawAmount, setWithdrawAmount] = useState<string>('');
   const [showSummary, setShowSummary] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
-  const quickAmounts = ['2,000', '5,000', '10,000', '202,000'];
+  const quickAmounts = ['2,000', '5,000', '10,000', '20,000'];
 
-  const calculateAmountToReceive = () => {
-    const amount = parseFloat(withdrawAmount.replace(/,/g, '')) || 0;
-    const exchangeRate = 1500; // N1,500 = $1
-    const fee = 500;
-    const total = amount * exchangeRate - fee;
-    return total > 0 ? total.toLocaleString() : '0';
+  // Get card color
+  const getCardColor = (colorId?: string) => {
+    const colorMap: { [key: string]: string } = {
+      green: '#1B800F',
+      brown: '#8B4513',
+      purple: '#6B46C1',
+    };
+    return colorMap[colorId || 'green'] || '#1B800F';
   };
 
+  // Calculate amount to receive (USD to NGN - fee)
+  const amountToReceive = useMemo(() => {
+    const amountUsd = parseFloat(withdrawAmount.replace(/,/g, '')) || 0;
+    const amountInNgn = amountUsd * EXCHANGE_RATE;
+    const total = amountInNgn - WITHDRAWAL_FEE_NGN;
+    return total > 0 ? total : 0;
+  }, [withdrawAmount]);
+
+  // Check if card has sufficient balance
+  const hasSufficientBalance = useMemo(() => {
+    const amountUsd = parseFloat(withdrawAmount.replace(/,/g, '')) || 0;
+    return cardBalanceUsd >= amountUsd;
+  }, [cardBalanceUsd, withdrawAmount]);
+
   const handleProceed = () => {
-    if (withdrawAmount) {
-      setShowSummary(true);
+    if (!withdrawAmount.trim()) {
+      Alert.alert('Validation Error', 'Please enter an amount to withdraw');
+      return;
+    }
+
+    const amountUsd = parseFloat(withdrawAmount.replace(/,/g, '')) || 0;
+    if (amountUsd <= 0) {
+      Alert.alert('Validation Error', 'Amount must be greater than 0');
+      return;
+    }
+
+    if (!hasSufficientBalance) {
+      Alert.alert(
+        'Insufficient Balance',
+        `You need $${amountUsd.toLocaleString()} to withdraw. Your card balance is $${cardBalanceUsd.toLocaleString()}.`
+      );
+      return;
+    }
+
+    setShowSummary(true);
+  };
+
+  const handleWithdrawCard = async () => {
+    if (!cardId) {
+      Alert.alert('Error', 'Card ID is missing');
+      return;
+    }
+
+    try {
+      const amountUsd = parseFloat(withdrawAmount.replace(/,/g, '')) || 0;
+
+      console.log('🔵 Withdraw Card - Request Data:', {
+        cardId,
+        amount: amountUsd,
+      });
+
+      const result = await withdrawCardMutation.mutateAsync({
+        id: cardId,
+        data: {
+          amount: amountUsd,
+          payment_wallet_type: 'naira_wallet',
+          payment_wallet_currency: 'NGN',
+        },
+      });
+
+      console.log('🟢 Withdraw Card - API Response:', JSON.stringify(result, null, 2));
+
+      if (result.success) {
+        setShowSummary(false);
+        setShowSuccess(true);
+      } else {
+        Alert.alert('Withdrawal Failed', result.message || 'Failed to withdraw from card. Please try again.');
+      }
+    } catch (error: any) {
+      console.log('❌ Withdraw Card - Error:', JSON.stringify(error, null, 2));
+      
+      if (error?.response?.status === 400) {
+        Alert.alert('Withdrawal Failed', error.response.data?.message || 'Insufficient balance or invalid request.');
+      } else if (error?.response?.status === 422) {
+        const errorMessages = error.response.data?.errors 
+          ? Object.values(error.response.data.errors).flat().join('\n')
+          : error.response.data?.message || 'Validation error';
+        Alert.alert('Validation Error', errorMessages);
+      } else {
+        Alert.alert(
+          'Withdrawal Failed',
+          error?.message || error?.response?.data?.message || 'An error occurred. Please try again.'
+        );
+      }
     }
   };
 
@@ -67,44 +170,76 @@ const WithdrawCardScreen = () => {
         contentContainerStyle={styles.scrollContent}
       >
         {/* Virtual Card */}
-        <ImageBackground
-          source={require('../../assets/card_background.png')}
-          style={styles.cardContainer}
-          imageStyle={styles.cardImage}
-          resizeMode="cover"
-        >
-          <View style={styles.cardTopRow}>
-            <ThemedText style={styles.cardSmallText}>Online Payment Virtual Card</ThemedText>
-            <View style={styles.cardTopRight}>
-              <ThemedText style={styles.cardBrandText}>Bills</ThemedText>
-              <View style={styles.cardEyeCircle}>
+        {isLoadingCard ? (
+          <View style={[styles.cardContainer, { justifyContent: 'center', alignItems: 'center' }]}>
+            <ActivityIndicator size="large" color="#42AC36" />
+          </View>
+        ) : card ? (
+          <ImageBackground
+            source={require('../../assets/card_background.png')}
+            style={styles.cardContainer}
+            imageStyle={styles.cardImage}
+            resizeMode="cover"
+          >
+            {/* Color overlay */}
+            <View
+              style={[
+                StyleSheet.absoluteFill,
+                {
+                  backgroundColor: getCardColor(card.card_color),
+                  opacity: 0.7,
+                  borderRadius: 24,
+                },
+              ]}
+            />
+            <View style={styles.cardContent}>
+              <View style={styles.cardTopRow}>
+                <ThemedText style={styles.cardSmallText}>Online Payment Virtual Card</ThemedText>
+                <View style={styles.cardTopRight}>
+                  <ThemedText style={styles.cardBrandText}>Bills Pro</ThemedText>
+                  <View style={styles.cardEyeCircle}>
+                    <Image
+                      source={require('../../assets/security-safe.png')}
+                      style={styles.eyeIcon}
+                      resizeMode="contain"
+                    />
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.cardAmountRow}>
+                <ThemedText style={styles.cardCurrency}>$</ThemedText>
+                <ThemedText style={styles.cardAmount}>
+                  {Number(card.balance || 0).toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </ThemedText>
+              </View>
+
+              <View style={styles.cardNumberRow}>
+                <ThemedText style={styles.cardMaskedNumber}>
+                  {`**** **** **** ${String(card.card_number || '').slice(-4)}`}
+                </ThemedText>
+              </View>
+
+              <View style={styles.cardBottomRow}>
+                <ThemedText style={styles.cardHolderName}>
+                  {card.card_name || 'No card'}
+                </ThemedText>
                 <Image
-                  source={require('../../assets/security-safe.png')}
-                  style={styles.eyeIcon}
+                  source={require('../../assets/Group 2.png')}
+                  style={styles.mastercardLogo}
                   resizeMode="contain"
                 />
               </View>
             </View>
+          </ImageBackground>
+        ) : (
+          <View style={[styles.cardContainer, { justifyContent: 'center', alignItems: 'center' }]}>
+            <ThemedText>Card not found</ThemedText>
           </View>
-
-          <View style={styles.cardAmountRow}>
-            <ThemedText style={styles.cardCurrency}>$</ThemedText>
-            <ThemedText style={styles.cardAmount}>10,000.00</ThemedText>
-          </View>
-
-          <View style={styles.cardNumberRow}>
-            <ThemedText style={styles.cardMaskedNumber}>**** **** **** 1234</ThemedText>
-          </View>
-
-          <View style={styles.cardBottomRow}>
-            <ThemedText style={styles.cardHolderName}>Camardeen Abdul Malik</ThemedText>
-            <Image
-              source={require('../../assets/Group 2.png')}
-              style={styles.mastercardLogo}
-              resizeMode="contain"
-            />
-          </View>
-        </ImageBackground>
+        )}
 
         {/* Quick Amount Buttons */}
         <View style={styles.quickAmountRow}>
@@ -158,7 +293,7 @@ const WithdrawCardScreen = () => {
         >
           <ThemedText style={styles.amountToReceiveLabel}>You will receive</ThemedText>
           <ThemedText style={styles.amountToReceiveValue}>
-            N{calculateAmountToReceive() || '0'}
+            N{amountToReceive.toLocaleString()}
           </ThemedText>
         </LinearGradient>
 
@@ -170,7 +305,7 @@ const WithdrawCardScreen = () => {
               style={styles.infoIcon}
               resizeMode="contain"
             />
-            <ThemedText style={styles.infoText}>Exchange Rate :$1,500 = N1</ThemedText>
+            <ThemedText style={styles.infoText}>Exchange Rate : $1 = N{EXCHANGE_RATE.toLocaleString()}</ThemedText>
           </View>
           <View style={styles.infoRow}>
             <Image
@@ -191,11 +326,19 @@ const WithdrawCardScreen = () => {
 
         {/* Proceed Button */}
         <TouchableOpacity
-          style={styles.proceedButton}
+          style={[
+            styles.proceedButton,
+            (!withdrawAmount.trim() || !hasSufficientBalance || isLoadingCard) && styles.proceedButtonDisabled,
+          ]}
           onPress={handleProceed}
           activeOpacity={0.8}
+          disabled={!withdrawAmount.trim() || !hasSufficientBalance || isLoadingCard}
         >
-          <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+          {isLoadingCard ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+          )}
         </TouchableOpacity>
       </ScrollView>
 
@@ -249,7 +392,7 @@ const WithdrawCardScreen = () => {
               </View>
               <View style={styles.summaryRow}>
                 <ThemedText style={styles.summaryLabel}>Amount you will receive</ThemedText>
-                <ThemedText style={styles.summaryValue}>N{calculateAmountToReceive() || '0'}</ThemedText>
+                <ThemedText style={styles.summaryValue}>N{amountToReceive.toLocaleString()}</ThemedText>
               </View>
               <View style={styles.summaryRow}>
                 <ThemedText style={styles.summaryLabel}>Fee</ThemedText>
@@ -258,7 +401,7 @@ const WithdrawCardScreen = () => {
               <View style={styles.summaryRow}>
                 <ThemedText style={styles.summaryLabel}>Total Amount</ThemedText>
                 <ThemedText style={styles.summaryValue}>
-                  N{(parseFloat(calculateAmountToReceive().replace(/,/g, '')) + 500 || 500).toLocaleString()}
+                  ${withdrawAmount || '0'}
                 </ThemedText>
               </View>
               <View style={styles.summaryRow}>
@@ -270,17 +413,23 @@ const WithdrawCardScreen = () => {
             {/* Action Buttons */}
             <View style={styles.summaryButtons}>
               <TouchableOpacity
-                style={styles.proceedSummaryButton}
-                onPress={() => {
-                  setShowSummary(false);
-                  setShowSuccess(true);
-                }}
+                style={[
+                  styles.proceedSummaryButton,
+                  withdrawCardMutation.isPending && styles.proceedSummaryButtonDisabled,
+                ]}
+                onPress={handleWithdrawCard}
+                disabled={withdrawCardMutation.isPending}
               >
-                <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                {withdrawCardMutation.isPending ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                )}
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.cancelButton}
                 onPress={() => setShowSummary(false)}
+                disabled={withdrawCardMutation.isPending}
               >
                 <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
               </TouchableOpacity>
@@ -380,13 +529,17 @@ const styles = StyleSheet.create({
     width: width - 40,
     height: 190,
     borderRadius: 24,
-    paddingHorizontal: 20,
-    paddingVertical: 18,
     overflow: 'hidden',
     marginBottom: 24,
   },
   cardImage: {
     borderRadius: 24,
+  },
+  cardContent: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    zIndex: 1,
   },
   cardTopRow: {
     flexDirection: 'row',
@@ -579,6 +732,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '400',
     color: '#FFFFFF',
+  },
+  proceedButtonDisabled: {
+    backgroundColor: '#D1D5DB',
+  },
+  proceedSummaryButtonDisabled: {
+    opacity: 0.6,
   },
   // Modal Styles
   modalOverlay: {

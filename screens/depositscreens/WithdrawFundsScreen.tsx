@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     StyleSheet,
@@ -12,6 +12,9 @@ import {
     StatusBar as RNStatusBar,
     Modal,
     Pressable,
+    ActivityIndicator,
+    Alert,
+    Clipboard,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,17 +22,12 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useBankAccounts, useWithdrawalFee } from '../../queries/withdrawalQueries';
+import { useWithdraw } from '../../mutations/withdrawalMutations';
+import { useFiatWallets } from '../../queries/walletQueries';
 
 const { width } = Dimensions.get('window');
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
-
-interface Account {
-    id: string;
-    accountName: string;
-    accountHolderName: string;
-    bankName: string;
-    accountNumber: string;
-}
 
 const WithdrawFundsScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
@@ -38,33 +36,30 @@ const WithdrawFundsScreen = () => {
     const [showAccountModal, setShowAccountModal] = useState(false);
     const [showSummaryModal, setShowSummaryModal] = useState(false);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
-    const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
+    const [showSecurityModal, setShowSecurityModal] = useState(false);
+    const [pin, setPin] = useState('');
+    const [selectedAccount, setSelectedAccount] = useState<any>(null);
 
-    const quickAmounts = ['2,000', '5,000', '10,000', '202,000'];
+    // Fetch data
+    const { data: balanceData, isLoading: isLoadingBalance, refetch: refetchBalance } = useFiatWallets();
+    const { data: accountsData, refetch: refetchAccounts } = useBankAccounts();
+    const { data: feeData } = useWithdrawalFee();
+    const withdrawMutation = useWithdraw();
 
-    const accounts: Account[] = [
-        {
-            id: '1',
-            accountName: 'Account 1',
-            accountHolderName: 'Qamardeen Abdul Malik',
-            bankName: 'Access Bank',
-            accountNumber: '113456789',
-        },
-        {
-            id: '2',
-            accountName: 'Account 2',
-            accountHolderName: 'Qamardeen Abdul Malik',
-            bankName: 'Access Bank',
-            accountNumber: '113456789',
-        },
-        {
-            id: '3',
-            accountName: 'Account 3',
-            accountHolderName: 'Qamardeen Abdul Malik',
-            bankName: 'Access Bank',
-            accountNumber: '113456789',
-        },
-    ];
+    const nairaWallet = balanceData?.data?.find((w: any) => w.currency === 'NGN' && w.country_code === 'NG');
+    const balance = nairaWallet ? parseFloat(nairaWallet.balance || 0) : 0;
+    const accounts = accountsData?.data || [];
+    const withdrawalFee = parseFloat(feeData?.data?.fee || 200); // Default to N200
+
+    // Set default account if available
+    useEffect(() => {
+        if (accounts.length > 0 && !selectedAccount) {
+            const defaultAccount = accounts.find((acc: any) => acc.is_default) || accounts[0];
+            setSelectedAccount(defaultAccount);
+        }
+    }, [accounts]);
+
+    const quickAmounts = ['2,000', '5,000', '10,000', '20,000'];
 
     const handleNumberPress = (num: string) => {
         if (num === '.') {
@@ -80,6 +75,16 @@ const WithdrawFundsScreen = () => {
         setWithdrawAmount(withdrawAmount.slice(0, -1));
     };
 
+    const handlePinNumberPress = (num: string) => {
+        if (pin.length < 4) {
+            setPin(pin + num);
+        }
+    };
+
+    const handlePinBackspace = () => {
+        setPin(pin.slice(0, -1));
+    };
+
     const handleQuickAmount = (amount: string) => {
         setSelectedQuickAmount(amount);
         setWithdrawAmount(amount.replace(/,/g, ''));
@@ -89,53 +94,150 @@ const WithdrawFundsScreen = () => {
         setShowAccountModal(true);
     };
 
-    const handleAccountSelect = (account: Account) => {
+    const handleAccountSelect = (account: any) => {
         setSelectedAccount(account);
         setShowAccountModal(false);
     };
 
     const handleNext = () => {
         if (withdrawAmount.trim() !== '' && selectedAccount) {
+            const amount = parseFloat(withdrawAmount.replace(/,/g, ''));
+            const totalAmount = amount + withdrawalFee;
+            
+            // Check balance before showing summary
+            if (balance < totalAmount) {
+                Alert.alert(
+                    'Insufficient Balance',
+                    `You need N${totalAmount.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    })} but you have N${balance.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    })}`
+                );
+                return;
+            }
+            
             setShowSummaryModal(true);
         }
     };
 
     const handleSummaryProceed = () => {
         setShowSummaryModal(false);
-        setShowSuccessModal(true);
+        setShowSecurityModal(true);
+        setPin(''); // Reset PIN
+    };
+
+    const handleSecurityNext = async () => {
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a 4-digit PIN');
+            return;
+        }
+        
+        if (!selectedAccount || !withdrawAmount) {
+            Alert.alert('Error', 'Please select an account and enter amount');
+            return;
+        }
+        
+        const amount = parseFloat(withdrawAmount.replace(/,/g, ''));
+        const totalAmount = amount + withdrawalFee;
+        
+        // Check balance again
+        if (balance < totalAmount) {
+            Alert.alert(
+                'Insufficient Balance',
+                `You need N${totalAmount.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                })} but you have N${balance.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                })}`
+            );
+            setShowSecurityModal(false);
+            setPin('');
+            return;
+        }
+        
+        try {
+            const result = await withdrawMutation.mutateAsync({
+                bank_account_id: selectedAccount.id,
+                amount: amount,
+                pin: pin,
+            });
+            
+            if (result.success) {
+                setShowSecurityModal(false);
+                setShowSuccessModal(true);
+                // Clear form
+                setWithdrawAmount('');
+                setSelectedQuickAmount(null);
+                setPin(''); // Clear PIN for security
+                // Refetch accounts and balance
+                refetchAccounts();
+                refetchBalance();
+            }
+        } catch (error: any) {
+            const errorMessage = error.response?.data?.message || error.message || 'Withdrawal failed';
+            
+            // Handle specific errors
+            if (errorMessage.includes('Invalid PIN') || errorMessage.includes('PIN')) {
+                Alert.alert('Invalid PIN', 'The PIN you entered is incorrect. Please try again.');
+                setPin(''); // Clear PIN on error
+            } else if (errorMessage.includes('Insufficient balance')) {
+                Alert.alert('Insufficient Balance', errorMessage);
+                setShowSecurityModal(false);
+                setPin('');
+            } else {
+                Alert.alert('Error', errorMessage);
+                setShowSecurityModal(false);
+                setPin('');
+            }
+        }
     };
 
     const handleSuccessTransaction = () => {
         setShowSuccessModal(false);
-        const formattedAmount = formatAmount(withdrawAmount);
-        const totalAmount = (parseFloat(withdrawAmount.replace(/,/g, '') || '0') + 200).toLocaleString('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-        });
+        const transactionData = withdrawMutation.data?.data;
         
-        navigation.navigate('TransactionHistory', {
-            type: 'withdrawal',
-            transactionData: {
-                type: 'Fiat Withdrawal',
-                amount: `N${formattedAmount}`,
-                fee: 'N200',
-                totalAmount: `N${totalAmount}`,
-                bankName: selectedAccount?.bankName || 'Access Bank',
-                accountNumber: selectedAccount?.accountNumber || '113456789',
-                accountName: selectedAccount?.accountHolderName || 'Qamardeen Abdul Malik',
-                transactionId: '2348hf8283hfc92eni',
-                date: new Date().toLocaleDateString('en-US', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric',
-                }) + ' - ' + new Date().toLocaleTimeString('en-US', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true,
-                }),
-                status: 'Successful',
-            },
-        });
+        if (transactionData) {
+            navigation.navigate('TransactionHistory', {
+                type: 'withdrawal',
+                transactionData: {
+                    type: 'Fiat Withdrawal',
+                    amount: `N${transactionData.amount.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    })}`,
+                    fee: `N${transactionData.fee.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    })}`,
+                    totalAmount: `N${transactionData.total_amount.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    })}`,
+                    bankName: transactionData.bank_account.bank_name,
+                    accountNumber: transactionData.bank_account.account_number,
+                    accountName: transactionData.bank_account.account_name,
+                    transactionId: transactionData.transaction.transaction_id,
+                    reference: transactionData.transaction.reference,
+                    date: new Date(transactionData.transaction.created_at).toLocaleDateString('en-US', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                    }) + ' - ' + new Date(transactionData.transaction.created_at).toLocaleTimeString('en-US', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true,
+                    }),
+                    status: transactionData.transaction.status === 'completed' ? 'Successful' : transactionData.transaction.status,
+                },
+            });
+        } else {
+            navigation.goBack();
+        }
     };
 
     const formatAmount = (amount: string) => {
@@ -146,7 +248,7 @@ const WithdrawFundsScreen = () => {
     };
 
     const formattedWithdrawAmount = formatAmount(withdrawAmount);
-    const totalAmount = (parseFloat(withdrawAmount.replace(/,/g, '') || '0') + 200).toLocaleString('en-US', {
+    const totalAmount = (parseFloat(withdrawAmount.replace(/,/g, '') || '0') + withdrawalFee).toLocaleString('en-US', {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     });
@@ -183,7 +285,16 @@ const WithdrawFundsScreen = () => {
                     <ThemedText style={styles.balanceLabel}>My Balance</ThemedText>
                     <View style={styles.balanceRow}>
                         <ThemedText style={styles.balanceCurrency}>N</ThemedText>
-                        <ThemedText style={styles.balanceAmount}>10,000.00</ThemedText>
+                        {isLoadingBalance ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" style={{ marginLeft: 8 }} />
+                        ) : (
+                            <ThemedText style={styles.balanceAmount}>
+                                {balance.toLocaleString('en-US', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                })}
+                            </ThemedText>
+                        )}
                     </View>
                 </ImageBackground>
                 <View style={styles.transferStrip}>
@@ -194,7 +305,12 @@ const WithdrawFundsScreen = () => {
                     />
                     <View style={styles.transferInfo}>
                         <ThemedText style={styles.transferTitle}>Instant Transfer</ThemedText>
-                        <ThemedText style={styles.transferFee}>Fee: N200</ThemedText>
+                        <ThemedText style={styles.transferFee}>
+                            Fee: N{withdrawalFee.toLocaleString('en-US', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                            })}
+                        </ThemedText>
                     </View>
                 </View>
 
@@ -218,7 +334,7 @@ const WithdrawFundsScreen = () => {
                 >
                     <View style={styles.selectAccountRow}>
                         <ThemedText style={[styles.input, !selectedAccount && styles.placeholderText]}>
-                            {selectedAccount ? `${selectedAccount.accountName} - ${selectedAccount.bankName}` : 'Select Account'}
+                            {selectedAccount ? `${selectedAccount.bank_name} - ${selectedAccount.account_number}` : 'Select Account'}
                         </ThemedText>
                         <Ionicons name="chevron-down" size={20} color="#9CA3AF" />
                     </View>
@@ -364,40 +480,69 @@ const WithdrawFundsScreen = () => {
                         </View>
 
                         <ScrollView style={styles.accountList} showsVerticalScrollIndicator={false}>
-                            {accounts.map((account) => (
-                                <TouchableOpacity
-                                    key={account.id}
-                                    style={styles.accountCard}
-                                    onPress={() => handleAccountSelect(account)}
-                                    activeOpacity={0.7}
-                                >
-                                    <View style={styles.accountCardHeader}>
-                                        <View style={styles.accountTitleRow}>
-                                            <Image
-                                                source={require('../../assets/Bank (1).png')}
-                                                style={styles.bankIcon}
-                                                resizeMode="contain"
-                                            />
-                                            <ThemedText style={styles.accountName}>{account.accountName}</ThemedText>
+                            {accounts.length === 0 ? (
+                                <View style={styles.emptyAccountContainer}>
+                                    <ThemedText style={styles.emptyAccountText}>No bank accounts found</ThemedText>
+                                    <TouchableOpacity
+                                        style={styles.addAccountButton}
+                                        onPress={() => {
+                                            setShowAccountModal(false);
+                                            navigation.navigate('WithdrawalAccounts');
+                                        }}
+                                    >
+                                        <ThemedText style={styles.addAccountButtonText}>Add Account</ThemedText>
+                                    </TouchableOpacity>
+                                </View>
+                            ) : (
+                                accounts.map((account: any) => (
+                                    <TouchableOpacity
+                                        key={account.id}
+                                        style={[
+                                            styles.accountCard,
+                                            selectedAccount?.id === account.id && styles.accountCardSelected,
+                                        ]}
+                                        onPress={() => handleAccountSelect(account)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <View style={styles.accountCardHeader}>
+                                            <View style={styles.accountTitleRow}>
+                                                <Image
+                                                    source={require('../../assets/Bank (1).png')}
+                                                    style={styles.bankIcon}
+                                                    resizeMode="contain"
+                                                />
+                                                <ThemedText style={styles.accountName}>
+                                                    {account.bank_name}
+                                                </ThemedText>
+                                                {account.is_default && (
+                                                    <View style={styles.defaultBadge}>
+                                                        <ThemedText style={styles.defaultBadgeText}>Default</ThemedText>
+                                                    </View>
+                                                )}
+                                            </View>
+                                            <TouchableOpacity
+                                                style={styles.selectButton}
+                                                onPress={() => handleAccountSelect(account)}
+                                                activeOpacity={0.7}
+                                            >
+                                                <ThemedText style={styles.selectButtonText}>Select</ThemedText>
+                                            </TouchableOpacity>
                                         </View>
-                                        <TouchableOpacity
-                                            style={styles.selectButton}
-                                            onPress={() => handleAccountSelect(account)}
-                                            activeOpacity={0.7}
-                                        >
-                                            <ThemedText style={styles.selectButtonText}>Select</ThemedText>
-                                        </TouchableOpacity>
-                                    </View>
-                                    
-                                    <ThemedText style={styles.accountHolderName}>{account.accountHolderName}</ThemedText>
-                                    
-                                    <View style={styles.accountDetailsRow}>
-                                        <ThemedText style={styles.bankName}>{account.bankName}</ThemedText>
-                                        <View style={styles.dot} />
-                                        <ThemedText style={styles.accountNumber}>{account.accountNumber}</ThemedText>
-                                    </View>
-                                </TouchableOpacity>
-                            ))}
+                                        
+                                        <ThemedText style={styles.accountHolderName}>
+                                            {account.account_name}
+                                        </ThemedText>
+                                        
+                                        <View style={styles.accountDetailsRow}>
+                                            <ThemedText style={styles.bankName}>{account.bank_name}</ThemedText>
+                                            <View style={styles.dot} />
+                                            <ThemedText style={styles.accountNumber}>
+                                                {account.account_number}
+                                            </ThemedText>
+                                        </View>
+                                    </TouchableOpacity>
+                                ))
+                            )}
                         </ScrollView>
                     </Pressable>
                 </Pressable>
@@ -449,7 +594,12 @@ const WithdrawFundsScreen = () => {
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Fee:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>N200</ThemedText>
+                                <ThemedText style={styles.summaryValue}>
+                                    N{withdrawalFee.toLocaleString('en-US', {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                    })}
+                                </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Total Amount:</ThemedText>
@@ -457,13 +607,23 @@ const WithdrawFundsScreen = () => {
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Bank Name:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{selectedAccount?.bankName || 'Access Bank'}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>
+                                    {selectedAccount?.bank_name || 'N/A'}
+                                </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Account Number:</ThemedText>
                                 <View style={styles.copyRow}>
-                                    <ThemedText style={styles.summaryValue}>{selectedAccount?.accountNumber || '113456789'}</ThemedText>
-                                    <TouchableOpacity activeOpacity={0.8}>
+                                    <ThemedText style={styles.summaryValue}>
+                                        {selectedAccount?.account_number || 'N/A'}
+                                    </ThemedText>
+                                    <TouchableOpacity
+                                        activeOpacity={0.8}
+                                        onPress={() => {
+                                            Clipboard.setString(selectedAccount?.account_number || '');
+                                            Alert.alert('Copied', 'Account number copied to clipboard');
+                                        }}
+                                    >
                                         <Ionicons name="copy-outline" size={16} color="#1B800F" />
                                     </TouchableOpacity>
                                 </View>
@@ -471,8 +631,16 @@ const WithdrawFundsScreen = () => {
                             <View style={[styles.summaryRow, styles.summaryRowLast]}>
                                 <ThemedText style={styles.summaryLabel}>Account Name:</ThemedText>
                                 <View style={styles.copyRow}>
-                                    <ThemedText style={styles.summaryValue}>{selectedAccount?.accountHolderName || 'Qamardeen Abdul Malik'}</ThemedText>
-                                    <TouchableOpacity activeOpacity={0.8}>
+                                    <ThemedText style={styles.summaryValue}>
+                                        {selectedAccount?.account_name || 'N/A'}
+                                    </ThemedText>
+                                    <TouchableOpacity
+                                        activeOpacity={0.8}
+                                        onPress={() => {
+                                            Clipboard.setString(selectedAccount?.account_name || '');
+                                            Alert.alert('Copied', 'Account name copied to clipboard');
+                                        }}
+                                    >
                                         <Ionicons name="copy-outline" size={16} color="#1B800F" />
                                     </TouchableOpacity>
                                 </View>
@@ -482,11 +650,16 @@ const WithdrawFundsScreen = () => {
                         {/* Action Buttons */}
                         <View style={styles.summaryButtons}>
                             <TouchableOpacity
-                                style={styles.proceedSummaryButton}
+                                style={[styles.proceedSummaryButton, withdrawMutation.isPending && styles.proceedSummaryButtonDisabled]}
                                 onPress={handleSummaryProceed}
                                 activeOpacity={0.8}
+                                disabled={withdrawMutation.isPending}
                             >
-                                <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                {withdrawMutation.isPending ? (
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                    <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                )}
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.cancelButton}
@@ -495,6 +668,159 @@ const WithdrawFundsScreen = () => {
                             >
                                 <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
                             </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* Security Confirmation Modal */}
+            <Modal
+                visible={showSecurityModal}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => {
+                    setShowSecurityModal(false);
+                    setPin('');
+                }}
+            >
+                <Pressable
+                    style={styles.securityModalOverlay}
+                    onPress={() => {
+                        setShowSecurityModal(false);
+                        setPin('');
+                    }}
+                >
+                    <Pressable style={styles.securityModalContent} onPress={(e) => e.stopPropagation()}>
+                        <View style={styles.securityModalHeader}>
+                            <ThemedText style={styles.securityModalTitle}>Security Confirmation</ThemedText>
+                            <TouchableOpacity
+                                style={styles.securityModalCloseButton}
+                                onPress={() => {
+                                    setShowSecurityModal(false);
+                                    setPin('');
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="close" size={24} color="#000000" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Warning Icon */}
+                        <View style={styles.verificationContainer}>
+                            <View style={styles.verificationIconOuter}>
+                                <View style={styles.verificationIconMiddle}>
+                                    <View style={styles.verificationIconInner}>
+                                        <Ionicons name="warning" size={40} color="#FFFFFF" />
+                                    </View>
+                                </View>
+                            </View>
+                            <ThemedText style={styles.verificationText}>Input Pin or Biometrics</ThemedText>
+                        </View>
+
+                        {/* PIN Input Fields */}
+                        <View style={styles.pinContainer}>
+                            {[0, 1, 2, 3].map((index) => (
+                                <View
+                                    key={index}
+                                    style={[
+                                        styles.pinDot,
+                                        pin.length > index && styles.pinDotFilled,
+                                    ]}
+                                />
+                            ))}
+                        </View>
+
+                        {/* Numpad */}
+                        <View style={styles.securityNumpadContainer}>
+                            <View style={styles.numpadLeft}>
+                                <View style={styles.numpadRow}>
+                                    {[1, 2, 3].map((num) => (
+                                        <TouchableOpacity
+                                            key={num}
+                                            style={styles.numButton}
+                                            onPress={() => handlePinNumberPress(num.toString())}
+                                            activeOpacity={0.7}
+                                        >
+                                            <ThemedText style={styles.numButtonText}>{num}</ThemedText>
+                                        </TouchableOpacity>
+                                    ))}
+                                    <TouchableOpacity
+                                        style={styles.backspaceButton}
+                                        onPress={handlePinBackspace}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Ionicons name="backspace-outline" size={24} color="#000000" />
+                                    </TouchableOpacity>
+                                </View>
+
+                                <View style={styles.numpadRow}>
+                                    {[4, 5, 6].map((num) => (
+                                        <TouchableOpacity
+                                            key={num}
+                                            style={styles.numButton}
+                                            onPress={() => handlePinNumberPress(num.toString())}
+                                            activeOpacity={0.7}
+                                        >
+                                            <ThemedText style={styles.numButtonText}>{num}</ThemedText>
+                                        </TouchableOpacity>
+                                    ))}
+                                </View>
+
+                                <View style={styles.numpadRow}>
+                                    {[7, 8, 9].map((num) => (
+                                        <TouchableOpacity
+                                            key={num}
+                                            style={styles.numButton}
+                                            onPress={() => handlePinNumberPress(num.toString())}
+                                            activeOpacity={0.7}
+                                        >
+                                            <ThemedText style={styles.numButtonText}>{num}</ThemedText>
+                                        </TouchableOpacity>
+                                    ))}
+                                </View>
+
+                                <View style={styles.numpadRow}>
+                                    <TouchableOpacity
+                                        style={styles.numButton}
+                                        onPress={() => {}}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Ionicons name="finger-print" size={24} color="#42AC36" />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={styles.numButton}
+                                        onPress={() => handlePinNumberPress('0')}
+                                        activeOpacity={0.7}
+                                    >
+                                        <ThemedText style={styles.numButtonText}>0</ThemedText>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={styles.numButton}
+                                        onPress={() => {}}
+                                        activeOpacity={0.7}
+                                    >
+                                        <ThemedText style={styles.numButtonText}>.</ThemedText>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+
+                            <View style={styles.numpadRight}>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.nextButton,
+                                        (pin.length !== 4 || withdrawMutation.isPending) && styles.nextButtonDisabled,
+                                    ]}
+                                    onPress={handleSecurityNext}
+                                    disabled={pin.length !== 4 || withdrawMutation.isPending}
+                                    activeOpacity={0.8}
+                                >
+                                    {withdrawMutation.isPending ? (
+                                        <ActivityIndicator color="#FFFFFF" size="small" />
+                                    ) : (
+                                        <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
                         </View>
                     </Pressable>
                 </Pressable>
@@ -527,8 +853,7 @@ const WithdrawFundsScreen = () => {
                         </View>
                         <ThemedText style={styles.successTitle}>Success</ThemedText>
                         <ThemedText style={styles.successMessage}>
-                            You have successfully completed a withdrawal of{' '}
-                            <ThemedText style={styles.successAmount}>N{formattedWithdrawAmount}</ThemedText>
+                            {withdrawMutation.data?.message || `You have successfully completed a withdrawal of N${formattedWithdrawAmount}`}
                         </ThemedText>
                         <View style={styles.successButtons}>
                             <TouchableOpacity
@@ -549,6 +874,7 @@ const WithdrawFundsScreen = () => {
                     </Pressable>
                 </Pressable>
             </Modal>
+
         </View>
     );
 };
@@ -1027,6 +1353,9 @@ const styles = StyleSheet.create({
         fontWeight: '400',
         color: '#FFFFFF',
     },
+    proceedSummaryButtonDisabled: {
+        opacity: 0.6,
+    },
     cancelButton: {
         flex: 1,
         backgroundColor: '#F3F4F6',
@@ -1128,6 +1457,140 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '400',
         color: '#6B7280',
+    },
+    emptyAccountContainer: {
+        padding: 40,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    emptyAccountText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginBottom: 16,
+        textAlign: 'center',
+    },
+    addAccountButton: {
+        backgroundColor: '#42AC36',
+        borderRadius: 12,
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+    },
+    addAccountButtonText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#FFFFFF',
+    },
+    accountCardSelected: {
+        borderWidth: 2,
+        borderColor: '#42AC36',
+    },
+    defaultBadge: {
+        backgroundColor: '#00800026',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 8,
+        marginLeft: 8,
+    },
+    defaultBadgeText: {
+        fontSize: 8,
+        fontWeight: '400',
+        color: '#008000',
+    },
+    // Security Modal Styles
+    securityModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'flex-end',
+    },
+    securityModalContent: {
+        backgroundColor: '#FFFFFF',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        paddingTop: 20,
+        paddingBottom: 32,
+        maxHeight: '90%',
+        width: '100%',
+    },
+    securityModalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 20,
+        marginBottom: 20,
+        position: 'relative',
+    },
+    securityModalTitle: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#000000',
+        textAlign: 'center',
+    },
+    securityModalCloseButton: {
+        position: 'absolute',
+        right: 20,
+        top: 0,
+        bottom: 0,
+        justifyContent: 'center',
+    },
+    verificationContainer: {
+        alignItems: 'center',
+        marginBottom: 24,
+        paddingHorizontal: 20,
+    },
+    verificationIconOuter: {
+        width: 100,
+        height: 100,
+        borderRadius: 50,
+        backgroundColor: '#FF9500',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    verificationIconMiddle: {
+        width: 84,
+        height: 84,
+        borderRadius: 42,
+        backgroundColor: '#FF9500',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 3,
+        borderColor: '#FFFFFF',
+    },
+    verificationIconInner: {
+        width: 60,
+        height: 60,
+        borderRadius: 30,
+        backgroundColor: '#FF9500',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    verificationText: {
+        fontSize: 20,
+        fontWeight: '600',
+        color: '#FF9500',
+    },
+    pinContainer: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 40,
+        paddingHorizontal: 20,
+    },
+    pinDot: {
+        width: 70,
+        height: 60,
+        borderRadius: 15,
+        backgroundColor: '#EFEFEF',
+        marginHorizontal: 5,
+    },
+    pinDotFilled: {
+        backgroundColor: '#42AC36',
+    },
+    securityNumpadContainer: {
+        flexDirection: 'row',
+        paddingHorizontal: 0,
+        paddingTop: 23,
     },
 });
 

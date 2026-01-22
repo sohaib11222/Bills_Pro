@@ -8,6 +8,9 @@ import {
     Dimensions,
     Platform,
     StatusBar as RNStatusBar,
+    ActivityIndicator,
+    Linking,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,12 +18,41 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../../components/ThemedText';
+import { useSupportInfo } from '../../../queries/supportQueries';
 
 const { width } = Dimensions.get('window');
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
+// Static mapping for social platform images (React Native doesn't support dynamic require)
+const socialImages: Record<string, any> = {
+    instagram: require('../../../assets/instagram.png'),
+    facebook: require('../../../assets/facebook.png'),
+    tiktok: require('../../../assets/tiktok.png'),
+};
+
 const SupportScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
+    const { data: supportData, isLoading, isError, refetch } = useSupportInfo();
+
+    const supportInfo = supportData?.data || {};
+    const contactOptions = supportInfo.contact_options || [];
+    const socials = supportInfo.socials || [];
+
+    const handleEmailContact = (email: string) => {
+        Linking.openURL(`mailto:${email}?subject=Support Request`).catch(() => {
+            Alert.alert('Error', 'Unable to open email client');
+        });
+    };
+
+    const handleSocialLink = (url: string) => {
+        Linking.openURL(url).catch(() => {
+            Alert.alert('Error', 'Unable to open link');
+        });
+    };
+
+    const getSocialImage = (platform: string) => {
+        return socialImages[platform] || socialImages.instagram; // Default to instagram if not found
+    };
 
     return (
         <View style={styles.container}>
@@ -39,91 +71,99 @@ const SupportScreen = () => {
                 <View style={styles.headerSpacer} />
             </View>
 
-            <ScrollView
-                style={styles.scrollView}
-                contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* Main Illustration Section */}
-                <View style={styles.illustrationSection}>
-                    <Image
-                        source={require('../../../assets/support_background.png')}
-                        style={styles.illustrationImage}
-                        resizeMode="contain"
-                    />
+            {isLoading ? (
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color="#42AC36" />
+                    <ThemedText style={styles.loadingText}>Loading support information...</ThemedText>
                 </View>
-
-                {/* Contact Options Section */}
-                <View style={styles.contactSection}>
+            ) : isError ? (
+                <View style={styles.errorContainer}>
+                    <ThemedText style={styles.errorText}>Failed to load support information</ThemedText>
                     <TouchableOpacity
-                        style={styles.contactCard}
+                        style={styles.retryButton}
+                        onPress={() => refetch()}
                         activeOpacity={0.7}
                     >
-                        <View style={styles.contactIconContainer}>
-                            <Image
-                                source={require('../../../assets/Envelope.png')}
-                                style={styles.contactIconImage}
-                                resizeMode="contain"
-                            />
-                        </View>
-                        <View style={styles.contactTextContainer}>
-                            <ThemedText style={styles.contactTitle}>Email Us</ThemedText>
-                            <ThemedText style={styles.contactSubtitle}>Contact us via Email</ThemedText>
-                        </View>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={styles.contactCard}
-                        activeOpacity={0.7}
-                        onPress={() => navigation.navigate('LiveChat')}
-                    >
-                        <View style={styles.contactIconContainer}>
-                            <Image
-                                source={require('../../../assets/Headset (1).png')}
-                                style={[styles.contactIconImage, {width: 24, height: 24, tintColor: '#008000'}]}
-                                resizeMode="contain"
-                            />
-                        </View>
-                        <View style={styles.contactTextContainer}>
-                            <ThemedText style={styles.contactTitle}>Live Chat</ThemedText>
-                            <ThemedText style={styles.contactSubtitle}>Contact us via live chat</ThemedText>
-                        </View>
+                        <ThemedText style={styles.retryButtonText}>Retry</ThemedText>
                     </TouchableOpacity>
                 </View>
-
-                {/* Socials Section */}
-                <View style={styles.socialsSection}>
-                    <ThemedText style={styles.socialsLabel}>Socials</ThemedText>
-                    <View style={styles.socialsList}>
-                        <TouchableOpacity style={styles.socialButton} activeOpacity={0.7}>
-                            <Image
-                                source={require('../../../assets/instagram.png')}
-                                style={styles.socialIcon}
-                                resizeMode="contain"
-                            />
-                            <ThemedText style={styles.socialText}>Instagram</ThemedText>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.socialButton} activeOpacity={0.7}>
-                            <Image
-                                source={require('../../../assets/facebook.png')}
-                                style={styles.socialIcon}
-                                resizeMode="contain"
-                            />
-                            <ThemedText style={styles.socialText}>Facebook</ThemedText>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.socialButton} activeOpacity={0.7}>
-                            <Image
-                                source={require('../../../assets/tiktok.png')}
-                                style={styles.socialIcon}
-                                resizeMode="contain"
-                            />
-                            <ThemedText style={styles.socialText}>TikTok</ThemedText>
-                        </TouchableOpacity>
+            ) : (
+                <ScrollView
+                    style={styles.scrollView}
+                    contentContainerStyle={styles.scrollContent}
+                    showsVerticalScrollIndicator={false}
+                >
+                    {/* Main Illustration Section */}
+                    <View style={styles.illustrationSection}>
+                        <Image
+                            source={require('../../../assets/support_background.png')}
+                            style={styles.illustrationImage}
+                            resizeMode="contain"
+                        />
                     </View>
-                </View>
-            </ScrollView>
+
+                    {/* Contact Options Section */}
+                    <View style={styles.contactSection}>
+                        {contactOptions.map((option: any, index: number) => (
+                            <TouchableOpacity
+                                key={index}
+                                style={styles.contactCard}
+                                activeOpacity={0.7}
+                                onPress={() => {
+                                    if (option.type === 'email' && option.value) {
+                                        handleEmailContact(option.value);
+                                    } else if (option.type === 'live_chat' && option.available) {
+                                        navigation.navigate('LiveChat');
+                                    }
+                                }}
+                            >
+                                <View style={styles.contactIconContainer}>
+                                    <Image
+                                        source={
+                                            option.type === 'email'
+                                                ? require('../../../assets/Envelope.png')
+                                                : require('../../../assets/Headset (1).png')
+                                        }
+                                        style={[
+                                            styles.contactIconImage,
+                                            option.type === 'live_chat' && { width: 24, height: 24, tintColor: '#008000' }
+                                        ]}
+                                        resizeMode="contain"
+                                    />
+                                </View>
+                                <View style={styles.contactTextContainer}>
+                                    <ThemedText style={styles.contactTitle}>{option.title || 'Contact'}</ThemedText>
+                                    <ThemedText style={styles.contactSubtitle}>{option.subtitle || ''}</ThemedText>
+                                </View>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+
+                    {/* Socials Section */}
+                    {socials.length > 0 && (
+                        <View style={styles.socialsSection}>
+                            <ThemedText style={styles.socialsLabel}>Socials</ThemedText>
+                            <View style={styles.socialsList}>
+                                {socials.map((social: any, index: number) => (
+                                    <TouchableOpacity
+                                        key={index}
+                                        style={styles.socialButton}
+                                        activeOpacity={0.7}
+                                        onPress={() => handleSocialLink(social.url)}
+                                    >
+                                        <Image
+                                            source={getSocialImage(social.platform)}
+                                            style={styles.socialIcon}
+                                            resizeMode="contain"
+                                        />
+                                        <ThemedText style={styles.socialText}>{social.name || social.platform}</ThemedText>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        </View>
+                    )}
+                </ScrollView>
+            )}
         </View>
     );
 };
@@ -248,6 +288,43 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '400',
         color: '#111827',
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 40,
+    },
+    loadingText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginTop: 12,
+    },
+    errorContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 40,
+        paddingHorizontal: 20,
+    },
+    errorText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#EF4444',
+        marginBottom: 16,
+        textAlign: 'center',
+    },
+    retryButton: {
+        backgroundColor: '#42AC36',
+        borderRadius: 12,
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+    },
+    retryButtonText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#FFFFFF',
     },
 });
 

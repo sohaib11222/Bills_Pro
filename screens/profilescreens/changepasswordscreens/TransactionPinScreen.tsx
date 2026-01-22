@@ -9,6 +9,8 @@ import {
     Image,
     Modal,
     Pressable,
+    Alert,
+    ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +18,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../../components/ThemedText';
+import { useSetPin } from '../../../mutations/authMutations';
 
 const { width, height } = Dimensions.get('window');
 
@@ -25,6 +28,7 @@ const TransactionPinScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const [pin, setPin] = useState('');
     const [showSuccessModal, setShowSuccessModal] = useState(false);
+    const setPinMutation = useSetPin();
 
     const handleNumberPress = (num: string) => {
         if (pin.length < 4) {
@@ -36,9 +40,42 @@ const TransactionPinScreen = () => {
         setPin(pin.slice(0, -1));
     };
 
-    const handleNext = () => {
-        if (pin.length === 4) {
-            setShowSuccessModal(true);
+    const handleNext = async () => {
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a complete 4-digit PIN');
+            return;
+        }
+
+        try {
+            console.log('🔵 Transaction PIN Setup - Request Data:', { pin: '****' });
+            const result = await setPinMutation.mutateAsync({
+                pin: pin,
+                pin_confirmation: pin, // Use same PIN for confirmation
+            });
+
+            console.log('🟢 Transaction PIN Setup - API Response:', JSON.stringify(result, null, 2));
+
+            if (result.success) {
+                console.log('✅ Transaction PIN Setup - Success');
+                setShowSuccessModal(true);
+            } else {
+                Alert.alert('PIN Setup Failed', result.message || 'Failed to set transaction PIN. Please try again.');
+                setPin('');
+            }
+        } catch (error: any) {
+            console.log('❌ Transaction PIN Setup - Error:', JSON.stringify(error, null, 2));
+            
+            // Handle validation errors from backend
+            if (error?.data?.errors) {
+                const errorMessages = Object.values(error.data.errors).flat().join('\n');
+                Alert.alert('PIN Setup Failed', errorMessages);
+            } else {
+                Alert.alert(
+                    'PIN Setup Failed',
+                    error?.message || error?.data?.message || 'Failed to set transaction PIN. Please try again.'
+                );
+            }
+            setPin('');
         }
     };
 
@@ -166,13 +203,17 @@ const TransactionPinScreen = () => {
                         <TouchableOpacity
                             style={[
                                 styles.nextButton,
-                                pin.length !== 4 && styles.nextButtonDisabled,
+                                (pin.length !== 4 || setPinMutation.isPending) && styles.nextButtonDisabled,
                             ]}
                             onPress={handleNext}
-                            disabled={pin.length !== 4}
+                            disabled={pin.length !== 4 || setPinMutation.isPending}
                             activeOpacity={0.8}
                         >
-                            <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                            {setPinMutation.isPending ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                                <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                            )}
                         </TouchableOpacity>
                     </View>
                 </View>

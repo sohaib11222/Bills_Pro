@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -10,6 +10,8 @@ import {
     Platform,
     StatusBar as RNStatusBar,
     KeyboardAvoidingView,
+    ActivityIndicator,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +19,15 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../../components/ThemedText';
+import {
+    useChatSession,
+    useChatMessages,
+} from '../../../queries/chatQueries';
+import {
+    useStartChat,
+    useSendChatMessage,
+    useMarkChatAsRead,
+} from '../../../mutations/chatMutations';
 
 const { width } = Dimensions.get('window');
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -24,89 +35,170 @@ type ChatDetailsRouteProp = RouteProp<RootStackParamList, 'ChatDetails'>;
 
 type IssueType = 'fiat' | 'virtual_card' | 'crypto';
 
-interface Message {
-    id: string;
-    text: string;
-    isUser: boolean;
-    timestamp: string;
-}
-
 const ChatDetailsScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const route = useRoute<ChatDetailsRouteProp>();
     const chatId = route.params?.chatId;
-
-    // If chatId exists, load existing chat data; otherwise start fresh
-    const [selectedIssue, setSelectedIssue] = useState<IssueType | null>(
-        chatId ? 'crypto' : null
-    );
+    const scrollViewRef = useRef<ScrollView>(null);
+    
+    const sessionId = chatId ? parseInt(chatId, 10) : undefined;
+    
+    const [selectedIssue, setSelectedIssue] = useState<IssueType | null>(null);
     const [message, setMessage] = useState('');
-    const [messages, setMessages] = useState<Message[]>(
-        chatId
-            ? [
-                  {
-                      id: '1',
-                      text: 'I have issue with crypto',
-                      isUser: true,
-                      timestamp: '07:22 AM - Sent',
-                  },
-                  {
-                      id: '2',
-                      text: 'Sorry for the inconvenience, can you describe your issue in detail',
-                      isUser: false,
-                      timestamp: '07:22 AM - Sent',
-                  },
-              ]
-            : []
-    );
 
-    const handleIssueSelect = (issue: IssueType) => {
-        setSelectedIssue(issue);
-        // Auto-send message when issue is selected
-        if (messages.length === 0) {
-            const issueMessage: Message = {
-                id: Date.now().toString(),
-                text: `I have issue with ${issue === 'fiat' ? 'fiat' : issue === 'virtual_card' ? 'virtual card' : 'crypto'}`,
-                isUser: true,
-                timestamp: new Date().toLocaleTimeString('en-US', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true,
-                }) + ' - Sent',
+    // Fetch session if sessionId exists
+    const { data: sessionData, isLoading: sessionLoading } = useChatSession(sessionId || 0);
+    
+    // Fetch messages
+    const { data: messagesData, isLoading: messagesLoading, refetch: refetchMessages } = useChatMessages(sessionId || 0);
+    
+    // Mutations
+    const startChatMutation = useStartChat();
+    const sendMessageMutation = useSendChatMessage();
+    const markAsReadMutation = useMarkChatAsRead();
+    
+    const session = sessionData?.data;
+    const messages = messagesData?.data || [];
+    const currentSessionId = sessionId || session?.id;
+    
+    // Set selected issue from session if exists
+    useEffect(() => {
+        if (session?.issue_type) {
+            const issueTypeMap: Record<string, IssueType> = {
+                'fiat_issue': 'fiat',
+                'virtual_card_issue': 'virtual_card',
+                'crypto_issue': 'crypto',
             };
-            setMessages([issueMessage]);
-            
-            // Simulate admin response after a delay
+            const mappedIssue = issueTypeMap[session.issue_type] || null;
+            setSelectedIssue(mappedIssue);
+        }
+    }, [session]);
+
+    // Auto-scroll to bottom when new messages arrive
+    useEffect(() => {
+        if (messages.length > 0 && scrollViewRef.current) {
             setTimeout(() => {
-                const adminResponse: Message = {
-                    id: (Date.now() + 1).toString(),
-                    text: 'Sorry for the inconvenience, can you describe your issue in detail',
-                    isUser: false,
-                    timestamp: new Date().toLocaleTimeString('en-US', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: true,
-                    }) + ' - Sent',
-                };
-                setMessages([issueMessage, adminResponse]);
-            }, 1000);
+                scrollViewRef.current?.scrollToEnd({ animated: true });
+            }, 100);
+        }
+    }, [messages.length]);
+
+    // Mark messages as read when session is opened
+    useEffect(() => {
+        if (currentSessionId) {
+            markAsReadMutation.mutate(currentSessionId);
+        }
+    }, [currentSessionId]);
+
+    // Poll for new messages every 5 seconds
+    useEffect(() => {
+        if (!currentSessionId) return;
+        
+        const interval = setInterval(() => {
+            refetchMessages();
+        }, 5000);
+        
+        return () => clearInterval(interval);
+    }, [currentSessionId]);
+
+    const handleIssueSelect = async (issue: IssueType) => {
+        if (currentSessionId) {
+            // Session already exists, just update UI
+            setSelectedIssue(issue);
+            return;
+        }
+        
+        // Map frontend issue type to backend format
+        const issueTypeMap: Record<IssueType, string> = {
+            fiat: 'fiat_issue',
+            virtual_card: 'virtual_card_issue',
+            crypto: 'crypto_issue',
+        };
+        
+        const backendIssueType = issueTypeMap[issue] || 'general';
+        const initialMessage = `I have issue with ${issue === 'fiat' ? 'fiat' : issue === 'virtual_card' ? 'virtual card' : 'crypto'}`;
+        
+        setSelectedIssue(issue);
+        
+        try {
+            const result = await startChatMutation.mutateAsync({
+                issue_type: backendIssueType as any,
+                message: initialMessage,
+            });
+            
+            // Backend returns: { success: true, data: { success: true, session: {...}, message: {...} } }
+            if (result.success && result.data?.success && result.data?.session) {
+                // Navigate to the new session
+                navigation.setParams({ chatId: result.data.session.id.toString() });
+                // Refetch messages after a short delay
+                setTimeout(() => {
+                    refetchMessages();
+                }, 500);
+            } else if (result.success === false || result.data?.success === false) {
+                // Active session exists - backend returns error with session in errors
+                const existingSession = result.errors?.session || result.data?.session;
+                Alert.alert(
+                    'Active Chat Exists',
+                    result.message || result.data?.message || 'You already have an active chat session.',
+                    [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                            text: 'Open Active Chat',
+                            onPress: () => {
+                                if (existingSession?.id) {
+                                    navigation.setParams({ chatId: existingSession.id.toString() });
+                                }
+                            },
+                        },
+                    ]
+                );
+            }
+        } catch (error: any) {
+            Alert.alert('Error', error.message || 'Failed to start chat. Please try again.');
         }
     };
 
-    const handleSendMessage = () => {
-        if (message.trim() !== '') {
-            const newMessage: Message = {
-                id: Date.now().toString(),
-                text: message.trim(),
-                isUser: true,
-                timestamp: new Date().toLocaleTimeString('en-US', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true,
-                }) + ' - Sent',
-            };
-            setMessages([...messages, newMessage]);
-            setMessage('');
+    const handleSendMessage = async () => {
+        if (message.trim() === '' || !currentSessionId) return;
+        
+        const messageText = message.trim();
+        setMessage('');
+        
+        try {
+            await sendMessageMutation.mutateAsync({
+                id: currentSessionId,
+                data: {
+                    message: messageText,
+                },
+            });
+            
+            // Refetch messages to get the new message
+            setTimeout(() => {
+                refetchMessages();
+            }, 300);
+            
+            // Scroll to bottom
+            setTimeout(() => {
+                scrollViewRef.current?.scrollToEnd({ animated: true });
+            }, 500);
+        } catch (error: any) {
+            Alert.alert('Error', error.message || 'Failed to send message. Please try again.');
+            setMessage(messageText); // Restore message on error
+        }
+    };
+
+    const formatTimestamp = (dateString: string, status?: string) => {
+        try {
+            const date = new Date(dateString);
+            const time = date.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+            });
+            const statusText = status === 'read' ? 'Read' : 'Sent';
+            return `${time} - ${statusText}`;
+        } catch {
+            return dateString;
         }
     };
 
@@ -137,118 +229,157 @@ const ChatDetailsScreen = () => {
                         />
                     </View>
                     <View style={styles.headerContactInfo}>
-                        <ThemedText style={styles.headerContactName}>Admin</ThemedText>
-                        <ThemedText style={styles.headerContactStatus}>Online</ThemedText>
+                        <ThemedText style={styles.headerContactName}>
+                            {session?.admin?.name || session?.admin?.first_name || 'Admin'}
+                        </ThemedText>
+                        <ThemedText style={styles.headerContactStatus}>
+                            {session?.status === 'active' ? 'Online' : session?.status === 'waiting' ? 'Waiting' : 'Offline'}
+                        </ThemedText>
                     </View>
                 </View>
                 
                 <View style={styles.headerSpacer} />
             </View>
 
-            <ScrollView
-                style={styles.scrollView}
-                contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* Issue Selection Section */}
-                <View style={styles.issueSelectionContainer}>
-                    <ThemedText style={styles.issueSelectionLabel}>Select Issue</ThemedText>
-                    <View style={styles.issueButtonsContainer}>
-                        <TouchableOpacity
-                            style={[
-                                styles.issueButton,
-                                selectedIssue === 'fiat' && styles.issueButtonSelected,
-                            ]}
-                            onPress={() => handleIssueSelect('fiat')}
-                            activeOpacity={0.7}
-                        >
-                            <ThemedText
-                                style={[
-                                    styles.issueButtonText,
-                                    selectedIssue === 'fiat' && styles.issueButtonTextSelected,
-                                ]}
-                            >
-                                Fiat issue
-                            </ThemedText>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[
-                                styles.issueButton,
-                                selectedIssue === 'virtual_card' && styles.issueButtonSelected,
-                            ]}
-                            onPress={() => handleIssueSelect('virtual_card')}
-                            activeOpacity={0.7}
-                        >
-                            <ThemedText
-                                style={[
-                                    styles.issueButtonText,
-                                    selectedIssue === 'virtual_card' && styles.issueButtonTextSelected,
-                                ]}
-                            >
-                                Virtual card issue
-                            </ThemedText>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[
-                                styles.issueButton,
-                                selectedIssue === 'crypto' && styles.issueButtonSelected,
-                            ]}
-                            onPress={() => handleIssueSelect('crypto')}
-                            activeOpacity={0.7}
-                        >
-                            <ThemedText
-                                style={[
-                                    styles.issueButtonText,
-                                    selectedIssue === 'crypto' && styles.issueButtonTextSelected,
-                                ]}
-                            >
-                                Crypto issue
-                            </ThemedText>
-                        </TouchableOpacity>
-                    </View>
+            {(sessionLoading || messagesLoading) && !currentSessionId ? (
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color="#42AC36" />
+                    <ThemedText style={styles.loadingText}>Loading...</ThemedText>
                 </View>
-
-                {/* Chat Messages */}
-                <View style={styles.messagesContainer}>
-                    {messages.map((msg) => (
-                        <View
-                            key={msg.id}
-                            style={[
-                                styles.messageWrapper,
-                                msg.isUser ? styles.messageWrapperUser : styles.messageWrapperAdmin,
-                            ]}
-                        >
-                            <View
-                                style={[
-                                    styles.messageBubble,
-                                    msg.isUser ? styles.messageBubbleUser : styles.messageBubbleAdmin,
-                                ]}
-                            >
-                                <ThemedText
+            ) : (
+                <ScrollView
+                    ref={scrollViewRef}
+                    style={styles.scrollView}
+                    contentContainerStyle={styles.scrollContent}
+                    showsVerticalScrollIndicator={false}
+                >
+                    {/* Issue Selection Section - Only show if no session */}
+                    {!currentSessionId && (
+                        <View style={styles.issueSelectionContainer}>
+                            <ThemedText style={styles.issueSelectionLabel}>Select Issue</ThemedText>
+                            <View style={styles.issueButtonsContainer}>
+                                <TouchableOpacity
                                     style={[
-                                        styles.messageText,
-                                        msg.isUser ? styles.messageTextUser : styles.messageTextAdmin,
+                                        styles.issueButton,
+                                        selectedIssue === 'fiat' && styles.issueButtonSelected,
                                     ]}
+                                    onPress={() => handleIssueSelect('fiat')}
+                                    activeOpacity={0.7}
+                                    disabled={startChatMutation.isPending}
                                 >
-                                    {msg.text}
-                                </ThemedText>
-                            </View>
-                            <ThemedText style={styles.messageTimestamp}>{msg.timestamp}</ThemedText>
-                        </View>
-                    ))}
-                </View>
+                                    <ThemedText
+                                        style={[
+                                            styles.issueButtonText,
+                                            selectedIssue === 'fiat' && styles.issueButtonTextSelected,
+                                        ]}
+                                    >
+                                        Fiat issue
+                                    </ThemedText>
+                                </TouchableOpacity>
 
-                {/* Waiting Divider */}
-                {messages.length > 0 && (
-                    <View style={styles.waitingDivider}>
-                        <View style={styles.waitingDividerLine} />
-                        <ThemedText style={styles.waitingDividerText}>Waiting for Admin</ThemedText>
-                        <View style={styles.waitingDividerLine} />
-                    </View>
-                )}
-            </ScrollView>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.issueButton,
+                                        selectedIssue === 'virtual_card' && styles.issueButtonSelected,
+                                    ]}
+                                    onPress={() => handleIssueSelect('virtual_card')}
+                                    activeOpacity={0.7}
+                                    disabled={startChatMutation.isPending}
+                                >
+                                    <ThemedText
+                                        style={[
+                                            styles.issueButtonText,
+                                            selectedIssue === 'virtual_card' && styles.issueButtonTextSelected,
+                                        ]}
+                                    >
+                                        Virtual card issue
+                                    </ThemedText>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[
+                                        styles.issueButton,
+                                        selectedIssue === 'crypto' && styles.issueButtonSelected,
+                                    ]}
+                                    onPress={() => handleIssueSelect('crypto')}
+                                    activeOpacity={0.7}
+                                    disabled={startChatMutation.isPending}
+                                >
+                                    <ThemedText
+                                        style={[
+                                            styles.issueButtonText,
+                                            selectedIssue === 'crypto' && styles.issueButtonTextSelected,
+                                        ]}
+                                    >
+                                        Crypto issue
+                                    </ThemedText>
+                                </TouchableOpacity>
+                            </View>
+                            {startChatMutation.isPending && (
+                                <View style={styles.loadingIndicator}>
+                                    <ActivityIndicator size="small" color="#42AC36" />
+                                    <ThemedText style={styles.loadingTextSmall}>Starting chat...</ThemedText>
+                                </View>
+                            )}
+                        </View>
+                    )}
+
+                    {/* Chat Messages */}
+                    {messagesLoading && currentSessionId ? (
+                        <View style={styles.loadingContainer}>
+                            <ActivityIndicator size="large" color="#42AC36" />
+                            <ThemedText style={styles.loadingText}>Loading messages...</ThemedText>
+                        </View>
+                    ) : messages.length === 0 && currentSessionId ? (
+                        <View style={styles.emptyContainer}>
+                            <ThemedText style={styles.emptyText}>No messages yet</ThemedText>
+                        </View>
+                    ) : (
+                        <View style={styles.messagesContainer}>
+                            {messages.map((msg: any) => {
+                                const isUser = msg.sender_type === 'user';
+                                const timestamp = formatTimestamp(msg.created_at, msg.status);
+                                
+                                return (
+                                    <View
+                                        key={msg.id}
+                                        style={[
+                                            styles.messageWrapper,
+                                            isUser ? styles.messageWrapperUser : styles.messageWrapperAdmin,
+                                        ]}
+                                    >
+                                        <View
+                                            style={[
+                                                styles.messageBubble,
+                                                isUser ? styles.messageBubbleUser : styles.messageBubbleAdmin,
+                                            ]}
+                                        >
+                                            <ThemedText
+                                                style={[
+                                                    styles.messageText,
+                                                    isUser ? styles.messageTextUser : styles.messageTextAdmin,
+                                                ]}
+                                            >
+                                                {msg.message}
+                                            </ThemedText>
+                                        </View>
+                                        <ThemedText style={styles.messageTimestamp}>{timestamp}</ThemedText>
+                                    </View>
+                                );
+                            })}
+                        </View>
+                    )}
+
+                    {/* Waiting Divider */}
+                    {messages.length > 0 && session?.status === 'waiting' && (
+                        <View style={styles.waitingDivider}>
+                            <View style={styles.waitingDividerLine} />
+                            <ThemedText style={styles.waitingDividerText}>Waiting for Admin</ThemedText>
+                            <View style={styles.waitingDividerLine} />
+                        </View>
+                    )}
+                </ScrollView>
+            )}
 
             {/* Message Input Field */}
             <View style={styles.inputContainer}>
@@ -271,7 +402,7 @@ const ChatDetailsScreen = () => {
                     style={styles.sendButton}
                     onPress={handleSendMessage}
                     activeOpacity={0.7}
-                    disabled={message.trim() === ''}
+                    disabled={message.trim() === '' || !currentSessionId || sendMessageMutation.isPending}
                 >
                     <Image
                         source={require('../../../assets/PaperPlaneRight.png')}
@@ -486,6 +617,41 @@ const styles = StyleSheet.create({
     },
     sendIconDisabled: {
         tintColor: '#9CA3AF',
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 40,
+    },
+    loadingText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginTop: 12,
+    },
+    loadingTextSmall: {
+        fontSize: 12,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginLeft: 8,
+    },
+    loadingIndicator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 12,
+    },
+    emptyContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+    },
+    emptyText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#9CA3AF',
     },
 });
 

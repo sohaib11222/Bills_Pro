@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -8,24 +8,44 @@ import {
     Dimensions,
     Platform,
     StatusBar as RNStatusBar,
+    ActivityIndicator,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useAddBankAccount, useUpdateBankAccount } from '../../mutations/withdrawalMutations';
 
 const { width } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type AddNewAccountRouteProp = RouteProp<RootStackParamList, 'AddNewAccount'>;
 
 const AddNewAccountScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
+    const route = useRoute<AddNewAccountRouteProp>();
+    const accountToEdit = route.params?.account;
+    
     const [bankName, setBankName] = useState('');
     const [accountNumber, setAccountNumber] = useState('');
     const [accountName, setAccountName] = useState('');
     const [makeDefault, setMakeDefault] = useState(false);
+    
+    const addAccountMutation = useAddBankAccount();
+    const updateAccountMutation = useUpdateBankAccount();
+    
+    // Populate form if editing
+    useEffect(() => {
+        if (accountToEdit) {
+            setBankName(accountToEdit.bank_name || '');
+            setAccountNumber(accountToEdit.account_number || '');
+            setAccountName(accountToEdit.account_name || '');
+            setMakeDefault(accountToEdit.is_default || false);
+        }
+    }, [accountToEdit]);
 
     const isFormValid = () => {
         return (
@@ -35,10 +55,42 @@ const AddNewAccountScreen = () => {
         );
     };
 
-    const handleSave = () => {
-        if (isFormValid()) {
-            // Handle save logic here
+    const handleSave = async () => {
+        if (!isFormValid()) return;
+        
+        try {
+            if (accountToEdit) {
+                // Update existing account (account_number cannot be changed)
+                await updateAccountMutation.mutateAsync({
+                    id: accountToEdit.id,
+                    data: {
+                        bank_name: bankName.trim(),
+                        account_name: accountName.trim(),
+                        // Note: account_number is not included as it cannot be changed
+                    },
+                });
+                Alert.alert('Success', 'Bank account updated successfully');
+            } else {
+                // Add new account
+                await addAccountMutation.mutateAsync({
+                    bank_name: bankName.trim(),
+                    account_number: accountNumber.trim(),
+                    account_name: accountName.trim(),
+                    currency: 'NGN',
+                    country_code: 'NG',
+                });
+                Alert.alert('Success', 'Bank account added successfully');
+                
+                // Note: The backend automatically sets the first account as default
+                // If makeDefault is checked and you want to set it as default after adding,
+                // you would need to call setDefaultBankAccount mutation here
+                // For now, the backend handles this automatically for the first account
+            }
+            
             navigation.goBack();
+        } catch (error: any) {
+            const errorMessage = error.response?.data?.message || error.message || 'Failed to save bank account';
+            Alert.alert('Error', errorMessage);
         }
     };
 
@@ -55,7 +107,9 @@ const AddNewAccountScreen = () => {
                 >
                     <Ionicons name="chevron-back" size={24} color="#111827" />
                 </TouchableOpacity>
-                <ThemedText style={styles.headerTitle}>Add New Account</ThemedText>
+                <ThemedText style={styles.headerTitle}>
+                    {accountToEdit ? 'Edit Account' : 'Add New Account'}
+                </ThemedText>
                 <View style={styles.headerSpacer} />
             </View>
 
@@ -78,13 +132,19 @@ const AddNewAccountScreen = () => {
 
                     <View style={styles.inputContainer}>
                         <TextInput
-                            style={styles.input}
+                            style={[styles.input, accountToEdit && styles.inputDisabled]}
                             value={accountNumber}
                             onChangeText={setAccountNumber}
                             placeholder="Account Number"
                             placeholderTextColor="#9CA3AF"
                             keyboardType="numeric"
+                            editable={!accountToEdit}
                         />
+                        {accountToEdit && (
+                            <ThemedText style={styles.disabledHint}>
+                                Account number cannot be changed
+                            </ThemedText>
+                        )}
                     </View>
 
                     <View style={styles.inputContainer}>
@@ -97,19 +157,21 @@ const AddNewAccountScreen = () => {
                         />
                     </View>
 
-                    {/* Make Default Checkbox */}
-                    <TouchableOpacity
-                        style={styles.checkboxContainer}
-                        activeOpacity={0.7}
-                        onPress={() => setMakeDefault(!makeDefault)}
-                    >
-                        <View style={[styles.checkbox, makeDefault && styles.checkboxChecked]}>
-                            {makeDefault && (
-                                <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                            )}
-                        </View>
-                        <ThemedText style={styles.checkboxLabel}>Make default</ThemedText>
-                    </TouchableOpacity>
+                    {/* Make Default Checkbox - Only show for new accounts */}
+                    {!accountToEdit && (
+                        <TouchableOpacity
+                            style={styles.checkboxContainer}
+                            activeOpacity={0.7}
+                            onPress={() => setMakeDefault(!makeDefault)}
+                        >
+                            <View style={[styles.checkbox, makeDefault && styles.checkboxChecked]}>
+                                {makeDefault && (
+                                    <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+                                )}
+                            </View>
+                            <ThemedText style={styles.checkboxLabel}>Make default</ThemedText>
+                        </TouchableOpacity>
+                    )}
                 </View>
             </ScrollView>
 
@@ -118,20 +180,24 @@ const AddNewAccountScreen = () => {
                 <TouchableOpacity
                     style={[
                         styles.saveButton,
-                        !isFormValid() && styles.saveButtonDisabled,
+                        (!isFormValid() || addAccountMutation.isPending || updateAccountMutation.isPending) && styles.saveButtonDisabled,
                     ]}
                     activeOpacity={0.8}
                     onPress={handleSave}
-                    disabled={!isFormValid()}
+                    disabled={!isFormValid() || addAccountMutation.isPending || updateAccountMutation.isPending}
                 >
-                    <ThemedText
-                        style={[
-                            styles.saveButtonText,
-                            !isFormValid() && styles.saveButtonTextDisabled,
-                        ]}
-                    >
-                        Save
-                    </ThemedText>
+                    {(addAccountMutation.isPending || updateAccountMutation.isPending) ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                        <ThemedText
+                            style={[
+                                styles.saveButtonText,
+                                (!isFormValid() || addAccountMutation.isPending || updateAccountMutation.isPending) && styles.saveButtonTextDisabled,
+                            ]}
+                        >
+                            Save
+                        </ThemedText>
+                    )}
                 </TouchableOpacity>
             </View>
         </View>
@@ -243,6 +309,17 @@ const styles = StyleSheet.create({
     },
     saveButtonTextDisabled: {
         color: '#9CA3AF',
+    },
+    inputDisabled: {
+        backgroundColor: '#F3F4F6',
+        color: '#6B7280',
+    },
+    disabledHint: {
+        fontSize: 10,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginTop: 4,
+        marginLeft: 4,
     },
 });
 

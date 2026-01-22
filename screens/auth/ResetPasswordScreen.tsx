@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions } from 'react-native';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useForgotPassword } from '../../mutations/authMutations';
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList>;
 
@@ -14,9 +15,50 @@ const { width, height } = Dimensions.get('window');
 const ResetPasswordScreen = () => {
   const navigation = useNavigation<NavigationProp>();
   const [email, setEmail] = useState('');
+  const forgotPasswordMutation = useForgotPassword();
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      Alert.alert('Error', 'Please enter your email address');
+      return;
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      Alert.alert('Validation Error', 'Please enter a valid email address');
+      return;
+    }
+
+    try {
+      console.log('🔵 Forgot Password - Request Data:', { email: email.trim() });
+      const result = await forgotPasswordMutation.mutateAsync({
+        email: email.trim(),
+      });
+
+      console.log('🟢 Forgot Password - API Response:', JSON.stringify(result, null, 2));
+
+      if (result.success) {
+        // Navigate to reset password code screen with email
+        navigation.navigate('ResetPasswordCode', { email: email.trim() });
+      } else {
+        Alert.alert('Error', result.message || 'Failed to send reset code. Please try again.');
+      }
+    } catch (error: any) {
+      console.log('❌ Forgot Password - Error:', JSON.stringify(error, null, 2));
+      Alert.alert(
+        'Error',
+        error?.message || error?.data?.message || 'Failed to send reset code. Please try again.'
+      );
+    }
+  };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
       <StatusBar style="light" />
 
       {/* Background */}
@@ -34,36 +76,49 @@ const ResetPasswordScreen = () => {
 
       {/* White Card */}
       <View style={styles.card}>
-        {/* Title */}
-        <ThemedText style={styles.title}>Reset Password</ThemedText>
-
-        {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>Input your registered email</ThemedText>
-
-        {/* Email Input */}
-        <View style={styles.formContainer}>
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Email Address"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </View>
-        </View>
-
-        {/* Proceed Button */}
-        <TouchableOpacity
-          style={styles.proceedButton}
-          onPress={() => navigation.navigate('ResetPasswordCode')}
+        <ScrollView
+          contentContainerStyle={styles.cardContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
-          <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
-        </TouchableOpacity>
+          {/* Title */}
+          <ThemedText style={styles.title}>Reset Password</ThemedText>
+
+          {/* Subtitle */}
+          <ThemedText style={styles.subtitle}>Input your registered email</ThemedText>
+
+          {/* Email Input */}
+          <View style={styles.formContainer}>
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="Email Address"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+          </View>
+        </ScrollView>
+
+        {/* Proceed Button - Fixed at bottom */}
+        <View style={styles.buttonWrapper}>
+          <TouchableOpacity
+            style={[styles.proceedButton, (!email.trim() || forgotPasswordMutation.isPending) && styles.proceedButtonDisabled]}
+            onPress={handleForgotPassword}
+            disabled={!email.trim() || forgotPasswordMutation.isPending}
+          >
+            {forgotPasswordMutation.isPending ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -103,12 +158,19 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: height * 0.33,
+    maxHeight: height * 0.5,
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
-    paddingTop: 30,
     paddingHorizontal: 20,
+  },
+  cardContent: {
+    paddingTop: 30,
+    paddingBottom: 20,
+  },
+  buttonWrapper: {
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    paddingTop: 10,
   },
   title: {
     fontSize: 30,
@@ -140,10 +202,7 @@ const styles = StyleSheet.create({
     color: '#000000',
   },
   proceedButton: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
+    width: '100%',
     height: 60,
     borderRadius: 100,
     backgroundColor: '#42AC36',
@@ -155,6 +214,9 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  proceedButtonDisabled: {
+    opacity: 0.6,
   },
 });
 

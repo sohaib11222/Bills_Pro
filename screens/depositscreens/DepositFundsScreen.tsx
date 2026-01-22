@@ -10,6 +10,8 @@ import {
     Dimensions,
     Platform,
     StatusBar as RNStatusBar,
+    ActivityIndicator,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +19,8 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useFiatWallets } from '../../queries/walletQueries';
+import { useInitiateDeposit } from '../../mutations/depositMutations';
 
 const { width } = Dimensions.get('window');
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -25,6 +29,14 @@ const DepositFundsScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const [depositAmount, setDepositAmount] = useState('');
     const [selectedQuickAmount, setSelectedQuickAmount] = useState<string | null>(null);
+
+    // Fetch data
+    const { data: balanceData, isLoading: isLoadingBalance } = useFiatWallets();
+    const initiateDepositMutation = useInitiateDeposit();
+
+    const nairaWallet = balanceData?.data?.find((w: any) => w.currency === 'NGN' && w.country_code === 'NG');
+    const balance = nairaWallet ? parseFloat(nairaWallet.balance || 0) : 0;
+    const depositFee = 200; // Fixed fee from backend
 
     const quickAmounts = ['2,000', '5,000', '10,000', '202,000'];
 
@@ -47,9 +59,39 @@ const DepositFundsScreen = () => {
         setDepositAmount(amount.replace(/,/g, ''));
     };
 
-    const handleNext = () => {
-        if (depositAmount.trim() !== '') {
-            navigation.navigate('DepositAccount', { amount: depositAmount });
+    const handleNext = async () => {
+        if (depositAmount.trim() === '') {
+            Alert.alert('Error', 'Please enter a deposit amount');
+            return;
+        }
+
+        const amount = parseFloat(depositAmount.replace(/,/g, ''));
+        
+        // Validate minimum amount (backend requires minimum 100)
+        if (amount < 100) {
+            Alert.alert('Error', 'Minimum deposit amount is N100');
+            return;
+        }
+
+        try {
+            const result = await initiateDepositMutation.mutateAsync({
+                amount: amount,
+                currency: 'NGN',
+                payment_method: 'instant_transfer',
+            });
+
+            if (result.success && result.data) {
+                // Navigate to DepositAccount with amount and deposit data
+                navigation.navigate('DepositAccount', {
+                    amount: depositAmount,
+                    depositData: result.data,
+                });
+            } else {
+                Alert.alert('Error', result.message || 'Failed to initiate deposit');
+            }
+        } catch (error: any) {
+            const errorMessage = error.response?.data?.message || error.message || 'Failed to initiate deposit';
+            Alert.alert('Error', errorMessage);
         }
     };
 
@@ -92,7 +134,16 @@ const DepositFundsScreen = () => {
                     <ThemedText style={styles.balanceLabel}>My Balance</ThemedText>
                     <View style={styles.balanceRow}>
                         <ThemedText style={styles.balanceCurrency}>N</ThemedText>
-                        <ThemedText style={styles.balanceAmount}>10,000.00</ThemedText>
+                        {isLoadingBalance ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" style={{ marginLeft: 8 }} />
+                        ) : (
+                            <ThemedText style={styles.balanceAmount}>
+                                {balance.toLocaleString('en-US', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                })}
+                            </ThemedText>
+                        )}
                     </View>
                 </ImageBackground>
                     <View style={styles.transferStrip}>
@@ -103,7 +154,12 @@ const DepositFundsScreen = () => {
                         />
                         <View style={styles.transferInfo}>
                             <ThemedText style={styles.transferTitle}>Instant Transfer</ThemedText>
-                            <ThemedText style={styles.transferFee}>Fee: N200</ThemedText>
+                            <ThemedText style={styles.transferFee}>
+                                Fee: N{depositFee.toLocaleString('en-US', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                })}
+                            </ThemedText>
                         </View>
                     </View>
 
@@ -225,13 +281,17 @@ const DepositFundsScreen = () => {
                     <TouchableOpacity
                         style={[
                             styles.nextButton,
-                            depositAmount.trim() === '' && styles.nextButtonDisabled,
+                            (depositAmount.trim() === '' || initiateDepositMutation.isPending) && styles.nextButtonDisabled,
                         ]}
                         onPress={handleNext}
-                        disabled={depositAmount.trim() === ''}
+                        disabled={depositAmount.trim() === '' || initiateDepositMutation.isPending}
                         activeOpacity={0.8}
                     >
-                        <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                        {initiateDepositMutation.isPending ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                            <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                        )}
                     </TouchableOpacity>
                 </View>
             </View>

@@ -8,6 +8,8 @@ import {
     Dimensions,
     Platform,
     StatusBar as RNStatusBar,
+    ActivityIndicator,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,66 +17,82 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../../components/ThemedText';
+import { useChatSessions, useActiveChatSession } from '../../../queries/chatQueries';
 
 const { width } = Dimensions.get('window');
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 type ChatStatus = 'all' | 'pending' | 'resolved';
 
-interface ChatItem {
-    id: string;
-    agentName: string;
-    issue: string;
-    date: string;
-    status: 'pending' | 'resolved';
-}
-
 const LiveChatScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const [selectedTab, setSelectedTab] = useState<ChatStatus>('all');
 
-    const chatData: ChatItem[] = [
-        {
-            id: '1',
-            agentName: 'Dave',
-            issue: 'Issue with deposit',
-            date: '09 Oct, 25 - 07:22 AM',
-            status: 'pending',
-        },
-        {
-            id: '2',
-            agentName: 'Dave',
-            issue: 'Issue with deposit',
-            date: '09 Oct, 25 - 07:22 AM',
-            status: 'pending',
-        },
-        {
-            id: '3',
-            agentName: 'Dave',
-            issue: 'Issue with deposit',
-            date: '09 Oct, 25 - 07:22 AM',
-            status: 'resolved',
-        },
-        {
-            id: '4',
-            agentName: 'Dave',
-            issue: 'Issue with deposit',
-            date: '09 Oct, 25 - 07:22 AM',
-            status: 'pending',
-        },
-    ];
+    // Fetch chat sessions
+    const { data: sessionsData, isLoading, isError, refetch } = useChatSessions(20);
+    const { data: activeSessionData } = useActiveChatSession();
 
-    const filteredChats = chatData.filter((chat) => {
+    const sessions = sessionsData?.data?.data || [];
+    const activeSession = activeSessionData?.data;
+
+    // Filter sessions based on selected tab
+    const filteredSessions = sessions.filter((session: any) => {
         if (selectedTab === 'all') return true;
-        return chat.status === selectedTab;
+        if (selectedTab === 'pending') {
+            return session.status === 'waiting' || session.status === 'active';
+        }
+        if (selectedTab === 'resolved') {
+            return session.status === 'closed';
+        }
+        return true;
     });
 
     const handleNewChat = () => {
+        // Check if user has active session
+        if (activeSession) {
+            Alert.alert(
+                'Active Chat Exists',
+                'You already have an active chat session. Please close it before starting a new one.',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                        text: 'Open Active Chat',
+                        onPress: () => navigation.navigate('ChatDetails', { chatId: activeSession.id.toString() }),
+                    },
+                ]
+            );
+            return;
+        }
+        
+        // Navigate to new chat (no chatId means start new chat)
         navigation.navigate('ChatDetails', { chatId: undefined });
     };
 
-    const handleOpenChat = (chatId: string) => {
-        navigation.navigate('ChatDetails', { chatId });
+    const handleOpenChat = (sessionId: number) => {
+        // Convert sessionId (number) to chatId (string) as expected by navigation
+        navigation.navigate('ChatDetails', { chatId: sessionId.toString() });
+    };
+
+    const formatDate = (dateString: string) => {
+        try {
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-US', {
+                day: '2-digit',
+                month: 'short',
+                year: '2-digit',
+            }) + ' - ' + date.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+            });
+        } catch {
+            return dateString;
+        }
+    };
+
+    const getIssueTypeDisplay = (issueType: string) => {
+        if (!issueType) return 'General issue';
+        return issueType.replace('_issue', '').replace('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase());
     };
 
     return (
@@ -94,144 +112,174 @@ const LiveChatScreen = () => {
                 <View style={styles.headerSpacer} />
             </View>
 
-            <ScrollView
-                style={styles.scrollView}
-                contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* New Chat Button */}
-                <TouchableOpacity
-                    style={styles.newChatButton}
-                    onPress={handleNewChat}
-                    activeOpacity={0.7}
-                >
-                    <Ionicons name="add" size={24} color="#00000080" />
-                    <ThemedText style={styles.newChatText}>New Chat</ThemedText>
-                </TouchableOpacity>
-
-                {/* Chat Category Tabs */}
-                <View style={styles.tabContainer}>
+            {isLoading ? (
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color="#42AC36" />
+                    <ThemedText style={styles.loadingText}>Loading chat sessions...</ThemedText>
+                </View>
+            ) : isError ? (
+                <View style={styles.errorContainer}>
+                    <ThemedText style={styles.errorText}>Failed to load chat sessions</ThemedText>
                     <TouchableOpacity
-                        style={[
-                            styles.tab,
-                            selectedTab === 'all' && styles.tabActive,
-                        ]}
-                        onPress={() => setSelectedTab('all')}
+                        style={styles.retryButton}
+                        onPress={() => refetch()}
                         activeOpacity={0.7}
                     >
-                        <ThemedText
-                            style={[
-                                styles.tabText,
-                                selectedTab === 'all' && styles.tabTextActive,
-                            ]}
-                        >
-                            All
-                        </ThemedText>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={[
-                            styles.tab,
-                            selectedTab === 'pending' && styles.tabActive,
-                        ]}
-                        onPress={() => setSelectedTab('pending')}
-                        activeOpacity={0.7}
-                    >
-                        <ThemedText
-                            style={[
-                                styles.tabText,
-                                selectedTab === 'pending' && styles.tabTextActive,
-                            ]}
-                        >
-                            Pending
-                        </ThemedText>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={[
-                            styles.tab,
-                            selectedTab === 'resolved' && styles.tabActive,
-                        ]}
-                        onPress={() => setSelectedTab('resolved')}
-                        activeOpacity={0.7}
-                    >
-                        <ThemedText
-                            style={[
-                                styles.tabText,
-                                selectedTab === 'resolved' && styles.tabTextActive,
-                            ]}
-                        >
-                            Resolved
-                        </ThemedText>
+                        <ThemedText style={styles.retryButtonText}>Retry</ThemedText>
                     </TouchableOpacity>
                 </View>
+            ) : (
+                <ScrollView
+                    style={styles.scrollView}
+                    contentContainerStyle={styles.scrollContent}
+                    showsVerticalScrollIndicator={false}
+                >
+                    {/* New Chat Button */}
+                    <TouchableOpacity
+                        style={styles.newChatButton}
+                        onPress={handleNewChat}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="add" size={24} color="#00000080" />
+                        <ThemedText style={styles.newChatText}>New Chat</ThemedText>
+                    </TouchableOpacity>
 
-                {/* Chat List */}
-                <View style={styles.chatList}>
-                    {filteredChats.map((chat) => (
-                        <View
-                            key={chat.id}
+                    {/* Chat Category Tabs */}
+                    <View style={styles.tabContainer}>
+                        <TouchableOpacity
                             style={[
-                                styles.chatCard,
-                                chat.status === 'resolved'
-                                    ? styles.chatCardResolved
-                                    : styles.chatCardPending,
+                                styles.tab,
+                                selectedTab === 'all' && styles.tabActive,
                             ]}
+                            onPress={() => setSelectedTab('all')}
+                            activeOpacity={0.7}
                         >
-                            <View style={styles.chatLeft}>
-                                <View style={styles.chatIconContainer}>
-                                    <Image
-                                        source={require('../../../assets/Headset (1).png')}
-                                        style={styles.chatIcon}
-                                        resizeMode="contain"
-                                    />
-                                </View>
-                                <View style={styles.chatInfo}>
-                                    <ThemedText style={styles.chatInfoLabel}>
-                                        Agent Name : <ThemedText style={styles.chatInfoValue}>{chat.agentName}</ThemedText>
-                                    </ThemedText>
-                                    <ThemedText style={styles.chatInfoLabel}>
-                                        Issue : <ThemedText style={styles.chatIssue}>{chat.issue}</ThemedText>
-                                    </ThemedText>
-                                    <ThemedText style={styles.chatInfoLabel}>
-                                        Date : <ThemedText style={styles.chatInfoValue}>{chat.date}</ThemedText>
-                                    </ThemedText>
-                                </View>
-                              
-                            </View>
-                            <View style={styles.chatRight}>
-                                <TouchableOpacity
-                                    style={styles.openChatButton}
-                                    onPress={() => handleOpenChat(chat.id)}
-                                    activeOpacity={0.7}
-                                >
-                                    <ThemedText style={styles.openChatButtonText}>Open Chat</ThemedText>
-                                </TouchableOpacity>
-                               
-                                <View
-                                    style={[
-                                        styles.statusTag,
-                                        chat.status === 'resolved'
-                                            ? styles.statusTagResolved
-                                            : styles.statusTagPending,
-                                    ]}
-                                >
-                                    <ThemedText
+                            <ThemedText
+                                style={[
+                                    styles.tabText,
+                                    selectedTab === 'all' && styles.tabTextActive,
+                                ]}
+                            >
+                                All
+                            </ThemedText>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.tab,
+                                selectedTab === 'pending' && styles.tabActive,
+                            ]}
+                            onPress={() => setSelectedTab('pending')}
+                            activeOpacity={0.7}
+                        >
+                            <ThemedText
+                                style={[
+                                    styles.tabText,
+                                    selectedTab === 'pending' && styles.tabTextActive,
+                                ]}
+                            >
+                                Pending
+                            </ThemedText>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.tab,
+                                selectedTab === 'resolved' && styles.tabActive,
+                            ]}
+                            onPress={() => setSelectedTab('resolved')}
+                            activeOpacity={0.7}
+                        >
+                            <ThemedText
+                                style={[
+                                    styles.tabText,
+                                    selectedTab === 'resolved' && styles.tabTextActive,
+                                ]}
+                            >
+                                Resolved
+                            </ThemedText>
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Chat List */}
+                    {filteredSessions.length === 0 ? (
+                        <View style={styles.emptyContainer}>
+                            <ThemedText style={styles.emptyText}>No chat sessions found</ThemedText>
+                        </View>
+                    ) : (
+                        <View style={styles.chatList}>
+                            {filteredSessions.map((session: any) => {
+                                const adminName = session.admin?.name || session.admin?.first_name || 'Admin';
+                                const issueType = getIssueTypeDisplay(session.issue_type || 'general');
+                                const status = session.status === 'closed' ? 'resolved' : 'pending';
+                                const date = formatDate(session.last_message_at || session.created_at);
+
+                                return (
+                                    <View
+                                        key={session.id}
                                         style={[
-                                            styles.statusTagText,
-                                            chat.status === 'resolved'
-                                                ? styles.statusTagTextResolved
-                                                : styles.statusTagTextPending,
+                                            styles.chatCard,
+                                            status === 'resolved'
+                                                ? styles.chatCardResolved
+                                                : styles.chatCardPending,
                                         ]}
                                     >
-                                        {chat.status === 'resolved' ? 'Resolved' : 'Pending'}
-                                    </ThemedText>
-                                </View>
-                            </View>
+                                        <View style={styles.chatLeft}>
+                                            <View style={styles.chatIconContainer}>
+                                                <Image
+                                                    source={require('../../../assets/Headset (1).png')}
+                                                    style={styles.chatIcon}
+                                                    resizeMode="contain"
+                                                />
+                                            </View>
+                                            <View style={styles.chatInfo}>
+                                                <ThemedText style={styles.chatInfoLabel}>
+                                                    Agent Name : <ThemedText style={styles.chatInfoValue}>{adminName}</ThemedText>
+                                                </ThemedText>
+                                                <ThemedText style={styles.chatInfoLabel}>
+                                                    Issue : <ThemedText style={styles.chatIssue}>{issueType}</ThemedText>
+                                                </ThemedText>
+                                                <ThemedText style={styles.chatInfoLabel}>
+                                                    Date : <ThemedText style={styles.chatInfoValue}>{date}</ThemedText>
+                                                </ThemedText>
+                                            </View>
+                                        </View>
+                                        <View style={styles.chatRight}>
+                                            <TouchableOpacity
+                                                style={styles.openChatButton}
+                                                onPress={() => handleOpenChat(session.id)}
+                                                activeOpacity={0.7}
+                                            >
+                                                <ThemedText style={styles.openChatButtonText}>Open Chat</ThemedText>
+                                            </TouchableOpacity>
+                                           
+                                            <View
+                                                style={[
+                                                    styles.statusTag,
+                                                    status === 'resolved'
+                                                        ? styles.statusTagResolved
+                                                        : styles.statusTagPending,
+                                                ]}
+                                            >
+                                                <ThemedText
+                                                    style={[
+                                                        styles.statusTagText,
+                                                        status === 'resolved'
+                                                            ? styles.statusTagTextResolved
+                                                            : styles.statusTagTextPending,
+                                                    ]}
+                                                >
+                                                    {status === 'resolved' ? 'Resolved' : 'Pending'}
+                                                </ThemedText>
+                                            </View>
+                                        </View>
+                                    </View>
+                                );
+                            })}
                         </View>
-                    ))}
-                </View>
-            </ScrollView>
+                    )}
+                </ScrollView>
+            )}
         </View>
     );
 };
@@ -406,6 +454,54 @@ const styles = StyleSheet.create({
     },
     statusTagTextResolved: {
         color: '#008000',
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 40,
+    },
+    loadingText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginTop: 12,
+    },
+    errorContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 40,
+        paddingHorizontal: 20,
+    },
+    errorText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#EF4444',
+        marginBottom: 16,
+        textAlign: 'center',
+    },
+    retryButton: {
+        backgroundColor: '#42AC36',
+        borderRadius: 12,
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+    },
+    retryButtonText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#FFFFFF',
+    },
+    emptyContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+    },
+    emptyText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#9CA3AF',
     },
 });
 

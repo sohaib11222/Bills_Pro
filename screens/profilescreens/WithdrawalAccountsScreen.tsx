@@ -8,6 +8,8 @@ import {
     Platform,
     StatusBar as RNStatusBar,
     Image,
+    ActivityIndicator,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,51 +17,58 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useBankAccounts } from '../../queries/withdrawalQueries';
+import {
+    useDeleteBankAccount,
+    useSetDefaultBankAccount,
+} from '../../mutations/withdrawalMutations';
 
 const { width } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-interface Account {
-    id: string;
-    accountName: string;
-    accountHolderName: string;
-    bankName: string;
-    accountNumber: string;
-    isDefault: boolean;
-}
-
 const WithdrawalAccountsScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
-    const [accounts, setAccounts] = useState<Account[]>([
-        {
-            id: '1',
-            accountName: 'Account 1',
-            accountHolderName: 'Qamardeen Abdul Malik',
-            bankName: 'Access Bank',
-            accountNumber: '1234567890',
-            isDefault: true,
-        },
-        {
-            id: '2',
-            accountName: 'Account 2',
-            accountHolderName: 'Qamardeen Abdul Malik',
-            bankName: 'Access Bank',
-            accountNumber: '1234567890',
-            isDefault: false,
-        },
-        {
-            id: '3',
-            accountName: 'Account 3',
-            accountHolderName: 'Qamardeen Abdul Malik',
-            bankName: 'Access Bank',
-            accountNumber: '1234567890',
-            isDefault: false,
-        },
-    ]);
+    
+    const { data: accountsData, isLoading, isError, refetch } = useBankAccounts();
+    const deleteAccountMutation = useDeleteBankAccount();
+    const setDefaultMutation = useSetDefaultBankAccount();
+    
+    const accounts = accountsData?.data || [];
 
-    const handleDelete = (accountId: string) => {
-        setAccounts(accounts.filter((acc) => acc.id !== accountId));
+    const handleDelete = (accountId: number) => {
+        Alert.alert(
+            'Delete Bank Account',
+            'Are you sure you want to delete this bank account?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            await deleteAccountMutation.mutateAsync(accountId);
+                            Alert.alert('Success', 'Bank account deleted successfully');
+                            refetch();
+                        } catch (error: any) {
+                            const errorMessage = error.response?.data?.message || error.message || 'Failed to delete bank account';
+                            Alert.alert('Error', errorMessage);
+                        }
+                    },
+                },
+            ]
+        );
+    };
+
+    const handleSetDefault = async (accountId: number) => {
+        try {
+            await setDefaultMutation.mutateAsync(accountId);
+            Alert.alert('Success', 'Default account updated successfully');
+            refetch();
+        } catch (error: any) {
+            const errorMessage = error.response?.data?.message || error.message || 'Failed to set default account';
+            Alert.alert('Error', errorMessage);
+        }
     };
 
     return (
@@ -84,51 +93,94 @@ const WithdrawalAccountsScreen = () => {
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
             >
-                {/* Account Cards */}
-                {accounts.map((account) => (
-                    <View key={account.id} style={styles.accountCard}>
-                        <View style={styles.accountCardHeader}>
-                            <View style={styles.accountTitleRow}>
-                                <Image
-                                    source={require('../../assets/Bank (1).png')}
-                                    style={styles.bankIcon}
-                                    resizeMode="contain"
-                                />
-                                <ThemedText style={styles.accountName}>{account.accountName}</ThemedText>
-                            </View>
-                            <TouchableOpacity
-                                style={styles.deleteButton}
-                                onPress={() => handleDelete(account.id)}
-                                activeOpacity={0.7}
-                            >
-                                <Ionicons name="trash-outline" size={20} color="#6B7280" />
-                            </TouchableOpacity>
-                        </View>
-                        
-                        <ThemedText style={styles.accountHolderName}>{account.accountHolderName}</ThemedText>
-                        
-                        <View style={styles.accountDetailsRow}>
-                            <ThemedText style={styles.bankName}>{account.bankName}</ThemedText>
-                            <View style={styles.dot} />
-                            <ThemedText style={styles.accountNumber}>{account.accountNumber}</ThemedText>
-                        </View>
-
-                        {account.isDefault && (
-                            <View style={styles.defaultTag}>
-                                <ThemedText style={styles.defaultTagText}>Default</ThemedText>
-                            </View>
-                        )}
+                {isLoading ? (
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color="#42AC36" />
+                        <ThemedText style={styles.loadingText}>Loading accounts...</ThemedText>
                     </View>
-                ))}
+                ) : isError ? (
+                    <View style={styles.errorContainer}>
+                        <ThemedText style={styles.errorText}>Failed to load accounts</ThemedText>
+                        <TouchableOpacity
+                            style={styles.retryButton}
+                            onPress={() => refetch()}
+                            activeOpacity={0.7}
+                        >
+                            <ThemedText style={styles.retryButtonText}>Retry</ThemedText>
+                        </TouchableOpacity>
+                    </View>
+                ) : accounts.length === 0 ? (
+                    <View style={styles.emptyContainer}>
+                        <ThemedText style={styles.emptyText}>No bank accounts found</ThemedText>
+                        <ThemedText style={styles.emptySubtext}>Add your first bank account to start withdrawing</ThemedText>
+                    </View>
+                ) : (
+                    <>
+                        {/* Account Cards */}
+                        {accounts.map((account: any) => (
+                            <View key={account.id} style={styles.accountCard}>
+                                <View style={styles.accountCardHeader}>
+                                    <View style={styles.accountTitleRow}>
+                                        <Image
+                                            source={require('../../assets/Bank (1).png')}
+                                            style={styles.bankIcon}
+                                            resizeMode="contain"
+                                        />
+                                        <ThemedText style={styles.accountName}>{account.bank_name}</ThemedText>
+                                    </View>
+                                    <View style={styles.headerActions}>
+                                        {!account.is_default && (
+                                            <TouchableOpacity
+                                                style={styles.setDefaultButton}
+                                                onPress={() => handleSetDefault(account.id)}
+                                                activeOpacity={0.7}
+                                            >
+                                                <ThemedText style={styles.setDefaultButtonText}>Set Default</ThemedText>
+                                            </TouchableOpacity>
+                                        )}
+                                        <TouchableOpacity
+                                            style={styles.editButton}
+                                            onPress={() => navigation.navigate('AddNewAccount', { account })}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Ionicons name="pencil-outline" size={18} color="#42AC36" />
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={styles.deleteButton}
+                                            onPress={() => handleDelete(account.id)}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Ionicons name="trash-outline" size={20} color="#6B7280" />
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
+                                
+                                <ThemedText style={styles.accountHolderName}>{account.account_name}</ThemedText>
+                                
+                                <View style={styles.accountDetailsRow}>
+                                    <ThemedText style={styles.bankName}>{account.bank_name}</ThemedText>
+                                    <View style={styles.dot} />
+                                    <ThemedText style={styles.accountNumber}>{account.account_number}</ThemedText>
+                                </View>
 
-                {/* Information Box */}
-                <View style={styles.infoBox}>
-                    <Ionicons name="information-circle" size={20} color="#111827" />
-                    <ThemedText style={styles.infoText}>
-                        To edit your account{' '}
-                        <ThemedText style={styles.infoLink}>Contact Support</ThemedText>
-                    </ThemedText>
-                </View>
+                                {account.is_default && (
+                                    <View style={styles.defaultTag}>
+                                        <ThemedText style={styles.defaultTagText}>Default</ThemedText>
+                                    </View>
+                                )}
+                            </View>
+                        ))}
+
+                        {/* Information Box */}
+                        <View style={styles.infoBox}>
+                            <Ionicons name="information-circle" size={20} color="#111827" />
+                            <ThemedText style={styles.infoText}>
+                                Tap the edit icon to modify account details or{' '}
+                                <ThemedText style={styles.infoLink}>Contact Support</ThemedText>
+                            </ThemedText>
+                        </View>
+                    </>
+                )}
             </ScrollView>
 
             {/* Add New Button */}
@@ -305,6 +357,82 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '400',
         color: '#FFFFFF',
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+    },
+    loadingText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginTop: 12,
+    },
+    errorContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+        paddingHorizontal: 20,
+    },
+    errorText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#EF4444',
+        marginBottom: 16,
+        textAlign: 'center',
+    },
+    retryButton: {
+        backgroundColor: '#42AC36',
+        borderRadius: 12,
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+    },
+    retryButtonText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#FFFFFF',
+    },
+    emptyContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+        paddingHorizontal: 20,
+    },
+    emptyText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#111827',
+        marginBottom: 8,
+        textAlign: 'center',
+    },
+    emptySubtext: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#6B7280',
+        textAlign: 'center',
+    },
+    headerActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    setDefaultButton: {
+        backgroundColor: '#42AC36',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+    },
+    setDefaultButtonText: {
+        fontSize: 10,
+        fontWeight: '400',
+        color: '#FFFFFF',
+    },
+    editButton: {
+        padding: 4,
     },
 });
 

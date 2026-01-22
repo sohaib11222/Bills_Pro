@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     StyleSheet,
@@ -11,6 +11,9 @@ import {
     Pressable,
     Platform,
     StatusBar as RNStatusBar,
+    ActivityIndicator,
+    Alert,
+    Clipboard,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,6 +21,8 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useDepositBankAccount } from '../../queries/depositQueries';
+import { useConfirmDeposit } from '../../mutations/depositMutations';
 
 const { width } = Dimensions.get('window');
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -26,62 +31,123 @@ type DepositAccountRouteProp = RouteProp<RootStackParamList, 'DepositAccount'>;
 const DepositAccountScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const route = useRoute<DepositAccountRouteProp>();
-    const { amount } = route.params || { amount: '0' };
+    const { amount, depositData } = route.params || { amount: '0' };
 
     const [showSummaryModal, setShowSummaryModal] = useState(false);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
+    const [depositReference, setDepositReference] = useState<string | null>(null);
+
+    // Fetch bank account if not provided in depositData
+    const { data: bankAccountData, isLoading: isLoadingBankAccount } = useDepositBankAccount('NGN', 'NG');
+    const confirmDepositMutation = useConfirmDeposit();
+
+    // Use depositData from navigation or fetch from API
+    const bankAccount = depositData?.bank_account || bankAccountData?.data;
+    const depositInfo = depositData?.deposit || null;
+    const reference = depositData?.reference || depositInfo?.deposit_reference || depositReference;
+
+    useEffect(() => {
+        if (depositData?.reference) {
+            setDepositReference(depositData.reference);
+        } else if (depositInfo?.deposit_reference) {
+            setDepositReference(depositInfo.deposit_reference);
+        }
+    }, [depositData, depositInfo]);
 
     const formattedAmount = parseFloat(amount || '0').toLocaleString('en-US', {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     });
 
+    const depositFee = depositInfo?.fee || depositData?.fee || 200;
+    const totalAmount = depositInfo?.total_amount || depositData?.total_amount || (parseFloat(amount || '0') + depositFee);
+
     const bankDetails = {
-        bankName: 'Gratuity Bank',
-        accountNumber: '113456789',
-        accountName: 'Yellow card Financial',
-        reference: '123456789',
+        bankName: bankAccount?.bank_name || 'N/A',
+        accountNumber: bankAccount?.account_number || 'N/A',
+        accountName: bankAccount?.account_name || 'N/A',
+        reference: reference || 'N/A',
     };
 
     const handleCopy = (text: string) => {
-        // Copy to clipboard functionality
+        Clipboard.setString(text);
+        Alert.alert('Copied', 'Copied to clipboard');
     };
 
     const handlePaymentMade = () => {
         setShowSummaryModal(true);
     };
 
-    const handleSummaryProceed = () => {
-        setShowSummaryModal(false);
-        setShowSuccessModal(true);
+    const handleSummaryProceed = async () => {
+        if (!reference) {
+            Alert.alert('Error', 'Deposit reference is missing');
+            return;
+        }
+
+        try {
+            const result = await confirmDepositMutation.mutateAsync({
+                reference: reference,
+            });
+
+            if (result.success && result.data) {
+                setShowSummaryModal(false);
+                setShowSuccessModal(true);
+            } else {
+                Alert.alert('Error', result.message || 'Deposit confirmation failed');
+            }
+        } catch (error: any) {
+            const errorMessage = error.response?.data?.message || error.message || 'Deposit confirmation failed';
+            Alert.alert('Error', errorMessage);
+        }
     };
 
     const handleSuccessTransaction = () => {
         setShowSuccessModal(false);
-        navigation.navigate('TransactionHistory', {
-            type: 'deposit',
-            transactionData: {
-                type: 'Fiat Deposit',
-                amount: `N${formattedAmount}`,
-                fee: 'N200',
-                totalAmount: `N${(parseFloat(amount || '0') + 200).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-                bankName: bankDetails.bankName,
-                accountNumber: bankDetails.accountNumber,
-                accountName: bankDetails.accountName,
-                reference: bankDetails.reference,
-                transactionId: '2348hf8283hfc92eni',
-                date: new Date().toLocaleDateString('en-US', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric',
-                }) + ' - ' + new Date().toLocaleTimeString('en-US', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true,
-                }),
-                status: 'Successful',
-            },
-        });
+        const transactionData = confirmDepositMutation.data?.data;
+        
+        if (transactionData) {
+            navigation.navigate('TransactionHistory', {
+                type: 'deposit',
+                transactionData: {
+                    type: 'Fiat Deposit',
+                    amount: `N${transactionData.deposit?.amount?.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    }) || formattedAmount}`,
+                    fee: `N${transactionData.deposit?.fee?.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    }) || depositFee.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    })}`,
+                    totalAmount: `N${transactionData.deposit?.total_amount?.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    }) || totalAmount.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    })}`,
+                    bankName: bankDetails.bankName,
+                    accountNumber: bankDetails.accountNumber,
+                    accountName: bankDetails.accountName,
+                    reference: reference || bankDetails.reference,
+                    transactionId: transactionData.transaction?.transaction_id || 'N/A',
+                    date: new Date(transactionData.transaction?.created_at || transactionData.deposit?.completed_at || new Date()).toLocaleDateString('en-US', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                    }) + ' - ' + new Date(transactionData.transaction?.created_at || transactionData.deposit?.completed_at || new Date()).toLocaleTimeString('en-US', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true,
+                    }),
+                    status: transactionData.deposit?.status === 'completed' ? 'Successful' : transactionData.deposit?.status || 'Successful',
+                },
+            });
+        } else {
+            navigation.goBack();
+        }
     };
 
     return (
@@ -106,108 +172,141 @@ const DepositAccountScreen = () => {
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
             >
-                {/* Avatar */}
-                <View style={styles.avatarContainer}>
-                    <View style={styles.avatarOuter}>
-                        <View style={styles.avatarMiddle}>
-                            <View style={styles.avatarInner}>
-                                <Image
-                                    source={require('../../assets/dummy_avatar.png')}
-                                    style={styles.avatar}
-                                    resizeMode="cover"
-                                />
+                {isLoadingBankAccount && !bankAccount ? (
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color="#42AC36" />
+                        <ThemedText style={styles.loadingText}>Loading bank account details...</ThemedText>
+                    </View>
+                ) : !bankAccount ? (
+                    <View style={styles.errorContainer}>
+                        <ThemedText style={styles.errorText}>No bank account found for deposits</ThemedText>
+                        <TouchableOpacity
+                            style={styles.retryButton}
+                            onPress={() => navigation.goBack()}
+                            activeOpacity={0.7}
+                        >
+                            <ThemedText style={styles.retryButtonText}>Go Back</ThemedText>
+                        </TouchableOpacity>
+                    </View>
+                ) : (
+                    <>
+                        {/* Avatar */}
+                        <View style={styles.avatarContainer}>
+                            <View style={styles.avatarOuter}>
+                                <View style={styles.avatarMiddle}>
+                                    <View style={styles.avatarInner}>
+                                        <Image
+                                            source={require('../../assets/dummy_avatar.png')}
+                                            style={styles.avatar}
+                                            resizeMode="cover"
+                                        />
+                                    </View>
+                                </View>
                             </View>
                         </View>
-                    </View>
-                </View>
 
-                {/* Amount to Deposit Card */}
-                <View style={styles.amountCard}>
-                    <ThemedText style={styles.amountLabel}>Amount to deposit</ThemedText>
-                    <ThemedText style={styles.amountValue}>N{formattedAmount}</ThemedText>
-                </View>
-
-                {/* Warning Box */}
-                <View style={styles.warningBox}>
-                    <ThemedText style={styles.warningText}>
-                        Ensure you deposit to this exact bank account to avoid loss of funds
-                    </ThemedText>
-                </View>
-
-                {/* Bank Details */}
-                <View style={styles.bankDetailsContainer}>
-                    <View style={styles.bankDetailRow}>
-                        <ThemedText style={styles.bankDetailLabel}>Bank Name</ThemedText>
-                        <View style={styles.bankDetailValueRow}>
-                            <ThemedText style={styles.bankDetailValue}>{bankDetails.bankName}</ThemedText>
-                            <TouchableOpacity
-                                style={styles.copyButton}
-                                onPress={() => handleCopy(bankDetails.bankName)}
-                                activeOpacity={0.7}
-                            >
-                                <Ionicons name="copy-outline" size={16} color="#1B800F" />
-                            </TouchableOpacity>
+                        {/* Amount to Deposit Card */}
+                        <View style={styles.amountCard}>
+                            <ThemedText style={styles.amountLabel}>Amount to deposit</ThemedText>
+                            <ThemedText style={styles.amountValue}>N{formattedAmount}</ThemedText>
                         </View>
-                    </View>
 
-                    <View style={styles.bankDetailRow}>
-                        <ThemedText style={styles.bankDetailLabel}>Account Number</ThemedText>
-                        <View style={styles.bankDetailValueRow}>
-                            <ThemedText style={styles.bankDetailValue}>{bankDetails.accountNumber}</ThemedText>
-                            <TouchableOpacity
-                                style={styles.copyButton}
-                                onPress={() => handleCopy(bankDetails.accountNumber)}
-                                activeOpacity={0.7}
-                            >
-                                <Ionicons name="copy-outline" size={16} color="#1B800F" />
-                            </TouchableOpacity>
+                        {/* Warning Box */}
+                        <View style={styles.warningBox}>
+                            <ThemedText style={styles.warningText}>
+                                Ensure you deposit to this exact bank account to avoid loss of funds
+                            </ThemedText>
                         </View>
-                    </View>
 
-                    <View style={styles.bankDetailRow}>
-                        <ThemedText style={styles.bankDetailLabel}>Account Name</ThemedText>
-                        <View style={styles.bankDetailValueRow}>
-                            <ThemedText style={styles.bankDetailValue}>{bankDetails.accountName}</ThemedText>
-                            <TouchableOpacity
-                                style={styles.copyButton}
-                                onPress={() => handleCopy(bankDetails.accountName)}
-                                activeOpacity={0.7}
-                            >
-                                <Ionicons name="copy-outline" size={16} color="#1B800F" />
-                            </TouchableOpacity>
+                        {/* Bank Details */}
+                        <View style={styles.bankDetailsContainer}>
+                            <View style={styles.bankDetailRow}>
+                                <ThemedText style={styles.bankDetailLabel}>Bank Name</ThemedText>
+                                <View style={styles.bankDetailValueRow}>
+                                    <ThemedText style={styles.bankDetailValue}>{bankDetails.bankName}</ThemedText>
+                                    <TouchableOpacity
+                                        style={styles.copyButton}
+                                        onPress={() => handleCopy(bankDetails.bankName)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Ionicons name="copy-outline" size={16} color="#1B800F" />
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+
+                            <View style={styles.bankDetailRow}>
+                                <ThemedText style={styles.bankDetailLabel}>Account Number</ThemedText>
+                                <View style={styles.bankDetailValueRow}>
+                                    <ThemedText style={styles.bankDetailValue}>{bankDetails.accountNumber}</ThemedText>
+                                    <TouchableOpacity
+                                        style={styles.copyButton}
+                                        onPress={() => handleCopy(bankDetails.accountNumber)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Ionicons name="copy-outline" size={16} color="#1B800F" />
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+
+                            <View style={styles.bankDetailRow}>
+                                <ThemedText style={styles.bankDetailLabel}>Account Name</ThemedText>
+                                <View style={styles.bankDetailValueRow}>
+                                    <ThemedText style={styles.bankDetailValue}>{bankDetails.accountName}</ThemedText>
+                                    <TouchableOpacity
+                                        style={styles.copyButton}
+                                        onPress={() => handleCopy(bankDetails.accountName)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Ionicons name="copy-outline" size={16} color="#1B800F" />
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+
+                            <View style={styles.bankDetailRow}>
+                                <ThemedText style={styles.bankDetailLabel}>Reference</ThemedText>
+                                <View style={styles.bankDetailValueRow}>
+                                    <ThemedText style={styles.bankDetailValue}>{bankDetails.reference}</ThemedText>
+                                    <TouchableOpacity
+                                        style={styles.copyButton}
+                                        onPress={() => handleCopy(bankDetails.reference)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Ionicons name="copy-outline" size={16} color="#1B800F" />
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
                         </View>
-                    </View>
 
-                    <View style={styles.bankDetailRow}>
-                        <ThemedText style={styles.bankDetailLabel}>Reference</ThemedText>
-                        <View style={styles.bankDetailValueRow}>
-                            <ThemedText style={styles.bankDetailValue}>{bankDetails.reference}</ThemedText>
-                            <TouchableOpacity
-                                style={styles.copyButton}
-                                onPress={() => handleCopy(bankDetails.reference)}
-                                activeOpacity={0.7}
-                            >
-                                <Ionicons name="copy-outline" size={16} color="#1B800F" />
-                            </TouchableOpacity>
+                        {/* Fee Information */}
+                        <View style={styles.feeBox}>
+                            <Ionicons name="information-circle-outline" size={20} color="#FFA500" />
+                            <ThemedText style={styles.feeText}>
+                                Fee : N{depositFee.toLocaleString('en-US', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                })}
+                            </ThemedText>
                         </View>
-                    </View>
-                </View>
-
-                {/* Fee Information */}
-                <View style={styles.feeBox}>
-                    <Ionicons name="information-circle-outline" size={20} color="#FFA500" />
-                    <ThemedText style={styles.feeText}>Fee : N200</ThemedText>
-                </View>
+                    </>
+                )}
             </ScrollView>
 
             {/* I have made payment Button */}
             <View style={styles.buttonContainer}>
                 <TouchableOpacity
-                    style={styles.paymentButton}
+                    style={[
+                        styles.paymentButton,
+                        (!bankAccount || confirmDepositMutation.isPending) && styles.paymentButtonDisabled,
+                    ]}
                     onPress={handlePaymentMade}
+                    disabled={!bankAccount || confirmDepositMutation.isPending}
                     activeOpacity={0.8}
                 >
-                    <ThemedText style={styles.paymentButtonText}>I have made payment</ThemedText>
+                    {confirmDepositMutation.isPending ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                        <ThemedText style={styles.paymentButtonText}>I have made payment</ThemedText>
+                    )}
                 </TouchableOpacity>
             </View>
 
@@ -257,12 +356,20 @@ const DepositAccountScreen = () => {
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Fee:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>N200</ThemedText>
+                                <ThemedText style={styles.summaryValue}>
+                                    N{depositFee.toLocaleString('en-US', {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                    })}
+                                </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Total Amount:</ThemedText>
                                 <ThemedText style={styles.summaryValue}>
-                                    N{(parseFloat(amount || '0') + 200).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    N{totalAmount.toLocaleString('en-US', {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                    })}
                                 </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
@@ -301,11 +408,19 @@ const DepositAccountScreen = () => {
                         {/* Action Buttons */}
                         <View style={styles.summaryButtons}>
                             <TouchableOpacity
-                                style={styles.proceedSummaryButton}
+                                style={[
+                                    styles.proceedSummaryButton,
+                                    confirmDepositMutation.isPending && styles.proceedSummaryButtonDisabled,
+                                ]}
                                 onPress={handleSummaryProceed}
+                                disabled={confirmDepositMutation.isPending}
                                 activeOpacity={0.8}
                             >
-                                <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                {confirmDepositMutation.isPending ? (
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                    <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                )}
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.cancelButton}
@@ -346,8 +461,7 @@ const DepositAccountScreen = () => {
                         </View>
                         <ThemedText style={styles.successTitle}>Success</ThemedText>
                         <ThemedText style={styles.successMessage}>
-                            You have successfully completed a deposit of{' '}
-                            <ThemedText style={styles.successAmount}>N{formattedAmount}</ThemedText>
+                            {confirmDepositMutation.data?.message || `You have successfully completed a deposit of N${formattedAmount}`}
                         </ThemedText>
                         <View style={styles.successButtons}>
                             <TouchableOpacity
@@ -359,7 +473,10 @@ const DepositAccountScreen = () => {
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.closeSuccessButton}
-                                onPress={() => setShowSuccessModal(false)}
+                                onPress={() => {
+                                    setShowSuccessModal(false);
+                                    navigation.navigate('Main');
+                                }}
                                 activeOpacity={0.8}
                             >
                                 <ThemedText style={styles.closeSuccessButtonText}>Close</ThemedText>
@@ -787,6 +904,49 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '400',
         color: '#6B7280',
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+    },
+    loadingText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginTop: 12,
+    },
+    errorContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+        paddingHorizontal: 20,
+    },
+    errorText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#EF4444',
+        marginBottom: 16,
+        textAlign: 'center',
+    },
+    retryButton: {
+        backgroundColor: '#42AC36',
+        borderRadius: 12,
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+    },
+    retryButtonText: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#FFFFFF',
+    },
+    paymentButtonDisabled: {
+        backgroundColor: '#D1D5DB',
+    },
+    proceedSummaryButtonDisabled: {
+        opacity: 0.6,
     },
 });
 
