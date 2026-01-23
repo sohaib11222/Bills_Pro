@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -7,6 +7,8 @@ import {
     ScrollView,
     TouchableOpacity,
     Dimensions,
+    ActivityIndicator,
+    RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +16,9 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useFiatWallets } from '../../queries/walletQueries';
+import { useCryptoWallets } from '../../queries/walletQueries';
+import { useFiatTransactions } from '../../queries/transactionQueries';
 
 const { width, height } = Dimensions.get('window');
 
@@ -21,42 +26,103 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const WalletsScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
+    const scrollViewRef = useRef<ScrollView>(null);
     const [selectedTab, setSelectedTab] = useState<'Naira' | 'Crypto'>('Naira');
+    const [isRefreshing, setIsRefreshing] = useState(false);
 
-    const recentTransactions = [
-        {
-            id: '1',
-            type: 'Funds Deposit',
-            status: 'Successful',
-            amount: '20,000',
-            date: '06 Oct, 25 - 08:00 PM',
-            isDeposit: true,
-        },
-        {
-            id: '2',
-            type: 'Funds Withdrawal',
-            status: 'Successful',
-            amount: '20,000',
-            date: '06 Oct, 25 - 08:00 PM',
-            isDeposit: false,
-        },
-        {
-            id: '3',
-            type: 'Funds Withdrawal',
-            status: 'Successful',
-            amount: '20,000',
-            date: '06 Oct, 25 - 08:00 PM',
-            isDeposit: false,
-        },
-        {
-            id: '4',
-            type: 'Funds Withdrawal',
-            status: 'Successful',
-            amount: '20,000',
-            date: '06 Oct, 25 - 08:00 PM',
-            isDeposit: false,
-        },
-    ];
+    // Fetch wallets
+    const { 
+        data: fiatWalletsData, 
+        isLoading: isLoadingFiat,
+        refetch: refetchFiat 
+    } = useFiatWallets();
+    
+    const { 
+        data: cryptoWalletsData, 
+        isLoading: isLoadingCrypto,
+        refetch: refetchCrypto 
+    } = useCryptoWallets();
+    
+    // Fetch recent transactions (for Naira tab)
+    const { 
+        data: transactionsData,
+        refetch: refetchTransactions 
+    } = useFiatTransactions({ limit: 5 });
+
+    // Extract data
+    const fiatWallets = fiatWalletsData?.data || [];
+    const cryptoWallets = cryptoWalletsData?.data || [];
+    const recentTransactions = transactionsData?.data || [];
+
+    // Calculate totals
+    const nairaBalance = fiatWallets.reduce((sum: number, wallet: any) => 
+        sum + parseFloat(wallet.balance || 0), 0
+    );
+    
+    const cryptoBalance = cryptoWallets.reduce((sum: number, wallet: any) => {
+        const balance = parseFloat(wallet.available_balance || 0);
+        const rate = parseFloat(wallet.wallet_currency?.rate || 0);
+        return sum + (balance * rate);
+    }, 0);
+
+    // Format balance
+    const formatBalance = (amount: number, currency: 'NGN' | 'USD') => {
+        const formatter = new Intl.NumberFormat('en-NG', {
+            style: 'currency',
+            currency: currency,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        });
+        return formatter.format(amount);
+    };
+
+    // Helper function to get crypto icon
+    const getCryptoIcon = (currency: string) => {
+        const icons: Record<string, any> = {
+            'BTC': require('../../assets/popular1.png'),
+            'ETH': require('../../assets/popular2.png'),
+            'USDT': require('../../assets/popular3.png'),
+            'USDC': require('../../assets/popular4.png'),
+        };
+        return icons[currency] || require('../../assets/popular1.png');
+    };
+
+    // Helper function to get crypto color
+    const getCryptoColor = (currency: string) => {
+        const colors: Record<string, string> = {
+            'BTC': '#FFA5004D',
+            'ETH': '#0000FF4D',
+            'USDT': '#0080004D',
+            'USDC': '#0000FF4D',
+        };
+        return colors[currency] || '#42AC36';
+    };
+
+    // Handle pull to refresh
+    const onRefresh = async () => {
+        setIsRefreshing(true);
+        try {
+            if (selectedTab === 'Naira') {
+                await Promise.all([refetchFiat(), refetchTransactions()]);
+            } else {
+                await refetchCrypto();
+            }
+        } catch (error) {
+            console.error('Error refreshing data:', error);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
+
+    // Loading state
+    if ((selectedTab === 'Naira' && isLoadingFiat) || (selectedTab === 'Crypto' && isLoadingCrypto)) {
+        return (
+            <View style={[styles.container, styles.loadingContainer]}>
+                <StatusBar style="dark" />
+                <ActivityIndicator size="large" color="#1B800F" />
+            </View>
+        );
+    }
 
     return (
         <View style={styles.container}>
@@ -127,15 +193,28 @@ const WalletsScreen = () => {
                             {selectedTab === 'Crypto' ? 'Crypto Balance' : 'Wallet Balance'}
                         </ThemedText>
                         <ThemedText style={styles.walletBalanceAmount}>
-                            {selectedTab === 'Crypto' ? '$200,000.00' : 'N200,000.00'}
+                            {selectedTab === 'Crypto' 
+                                ? formatBalance(cryptoBalance, 'USD')
+                                : formatBalance(nairaBalance, 'NGN')}
                         </ThemedText>
                     </ImageBackground>
                 </View>
             </ImageBackground>
             <ScrollView
+                ref={scrollViewRef}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scrollContent}
-                style={{ marginTop: -20, zIndex: 3, backgroundColor: '#fff' }}
+                style={styles.scrollViewContainer}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isRefreshing}
+                        onRefresh={onRefresh}
+                        tintColor="#1B800F"
+                        colors={['#1B800F']}
+                        progressViewOffset={20}
+                        size="large"
+                    />
+                }
             >
                 {/* Action Buttons */}
                 {selectedTab === 'Crypto' ? (
@@ -202,7 +281,11 @@ const WalletsScreen = () => {
                     </View>
                 ) : (
                     <View style={styles.actionButtonsContainer}>
-                        <TouchableOpacity style={[styles.actionButton, styles.depositButton]} activeOpacity={0.8}>
+                        <TouchableOpacity 
+                            style={[styles.actionButton, styles.depositButton]} 
+                            activeOpacity={0.8}
+                            onPress={() => navigation.navigate('DepositFunds')}
+                        >
                             <View style={[styles.actionButtonIcon, styles.depositIcon]}>
                                 <Image
                                     source={require('../../assets/sent (1).png')}
@@ -257,137 +340,63 @@ const WalletsScreen = () => {
 
                         {/* Crypto Assets Grid */}
                         <View style={styles.cryptoAssetsGrid}>
-                            {/* BTC */}
-                            <TouchableOpacity
-                                style={styles.cryptoAssetCard}
-                                activeOpacity={0.8}
-                                onPress={() => {
-                                    navigation.navigate('CryptoWallet', {
-                                        cryptoType: 'BTC',
-                                        balance: '0.00023',
-                                        usdValue: '$20,000',
-                                        icon: require('../../assets/popular1.png'),
-                                        iconBackground: '#FFA5004D',
-                                    });
-                                }}
-                            >
-                                <View style={[styles.cryptoAssetIcon, { backgroundColor: '#FFA5004D' }]}>
-                                    <Image
-                                        source={require('../../assets/popular1.png')}
-                                        style={styles.cryptoAssetIconImage}
-                                        resizeMode="contain"
-                                    />
-                                </View>
-                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                    <View style={styles.cryptoAssetContent}>
-                                        <ThemedText style={styles.cryptoAssetSymbol}>BTC</ThemedText>
-                                        <ThemedText style={styles.cryptoAssetName}>Bitcoin</ThemedText>
-                                    </View>
-                                    <View style={styles.cryptoAssetRight}>
-                                        <ThemedText style={styles.cryptoAssetAmount}>0.00023</ThemedText>
-                                        <ThemedText style={styles.cryptoAssetValue}>$20,000</ThemedText>
-                                    </View>
-                                </View>
-                            </TouchableOpacity>
+                            {cryptoWallets.length > 0 ? (
+                                cryptoWallets
+                                    .filter((wallet: any) => parseFloat(wallet.available_balance || 0) > 0)
+                                    .map((wallet: any) => {
+                                        const balance = parseFloat(wallet.available_balance || 0);
+                                        const rate = parseFloat(wallet.wallet_currency?.rate || 0);
+                                        const usdValue = balance * rate;
 
-                            {/* ETH */}
-                            <TouchableOpacity
-                                style={styles.cryptoAssetCard}
-                                activeOpacity={0.8}
-                                onPress={() => {
-                                    navigation.navigate('CryptoWallet', {
-                                        cryptoType: 'ETH',
-                                        balance: '1.23',
-                                        usdValue: '$5,200',
-                                        icon: require('../../assets/popular2.png'),
-                                        iconBackground: '#0000FF4D',
-                                    });
-                                }}
-                            >
-                                <View style={[styles.cryptoAssetIcon, { backgroundColor: '#0000FF4D' }]}>
-                                    <Image
-                                        source={require('../../assets/popular2.png')}
-                                        style={styles.cryptoAssetIconImage}
-                                        resizeMode="contain"
-                                    />
+                                        return (
+                                            <TouchableOpacity
+                                                key={wallet.id}
+                                                style={styles.cryptoAssetCard}
+                                                activeOpacity={0.8}
+                                                onPress={() => {
+                                                    navigation.navigate('CryptoWallet', {
+                                                        currency: wallet.currency,
+                                                        blockchain: wallet.blockchain,
+                                                        balance: balance.toString(),
+                                                        usdValue: `$${usdValue.toFixed(2)}`,
+                                                        icon: getCryptoIcon(wallet.currency),
+                                                        iconBackground: getCryptoColor(wallet.currency),
+                                                    });
+                                                }}
+                                            >
+                                                <View style={[styles.cryptoAssetIcon, { backgroundColor: getCryptoColor(wallet.currency) }]}>
+                                                    <Image
+                                                        source={getCryptoIcon(wallet.currency)}
+                                                        style={styles.cryptoAssetIconImage}
+                                                        resizeMode="contain"
+                                                    />
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <View style={styles.cryptoAssetContent}>
+                                                        <ThemedText style={styles.cryptoAssetSymbol}>
+                                                            {wallet.currency}
+                                                        </ThemedText>
+                                                        <ThemedText style={styles.cryptoAssetName}>
+                                                            {wallet.wallet_currency?.symbol || wallet.currency}
+                                                        </ThemedText>
+                                                    </View>
+                                                    <View style={styles.cryptoAssetRight}>
+                                                        <ThemedText style={styles.cryptoAssetAmount}>
+                                                            {balance.toFixed(4)}
+                                                        </ThemedText>
+                                                        <ThemedText style={styles.cryptoAssetValue}>
+                                                            ${usdValue.toFixed(2)}
+                                                        </ThemedText>
+                                                    </View>
+                                                </View>
+                                            </TouchableOpacity>
+                                        );
+                                    })
+                            ) : (
+                                <View style={styles.emptyContainer}>
+                                    <ThemedText style={styles.emptyText}>No crypto wallets found</ThemedText>
                                 </View>
-                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                    <View style={styles.cryptoAssetContent}>
-                                        <ThemedText style={styles.cryptoAssetSymbol}>ETH</ThemedText>
-                                        <ThemedText style={styles.cryptoAssetName}>Ethereum</ThemedText>
-                                    </View>
-                                    <View style={styles.cryptoAssetRight}>
-                                        <ThemedText style={styles.cryptoAssetAmount}>1.23</ThemedText>
-                                        <ThemedText style={styles.cryptoAssetValue}>$5,200</ThemedText>
-                                    </View>
-                                </View>
-                            </TouchableOpacity>
-
-                            {/* USDT */}
-                            <TouchableOpacity
-                                style={styles.cryptoAssetCard}
-                                activeOpacity={0.8}
-                                onPress={() => {
-                                    navigation.navigate('CryptoWallet', {
-                                        cryptoType: 'USDT',
-                                        balance: '200',
-                                        usdValue: '$200',
-                                        icon: require('../../assets/popular3.png'),
-                                        iconBackground: '#0080004D',
-                                    });
-                                }}
-                            >
-                                <View style={[styles.cryptoAssetIcon, { backgroundColor: '#0080004D' }]}>
-                                    <Image
-                                        source={require('../../assets/popular3.png')}
-                                        style={styles.cryptoAssetIconImage}
-                                        resizeMode="contain"
-                                    />
-                                </View>
-                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                    <View style={styles.cryptoAssetContent}>
-                                        <ThemedText style={styles.cryptoAssetSymbol}>USDT</ThemedText>
-                                        <ThemedText style={styles.cryptoAssetName}>Tehter</ThemedText>
-                                    </View>
-                                    <View style={styles.cryptoAssetRight}>
-                                        <ThemedText style={styles.cryptoAssetAmount}>200</ThemedText>
-                                        <ThemedText style={styles.cryptoAssetValue}>$200</ThemedText>
-                                    </View>
-                                </View>
-                            </TouchableOpacity>
-
-                            {/* USDC */}
-                            <TouchableOpacity
-                                style={styles.cryptoAssetCard}
-                                activeOpacity={0.8}
-                                onPress={() => {
-                                    navigation.navigate('CryptoWallet', {
-                                        cryptoType: 'USDC',
-                                        balance: '200',
-                                        usdValue: '$200',
-                                        icon: require('../../assets/popular4.png'),
-                                        iconBackground: '#0000FF4D',
-                                    });
-                                }}
-                            >
-                                <View style={[styles.cryptoAssetIcon, { backgroundColor: '#0000FF4D' }]}>
-                                    <Image
-                                        source={require('../../assets/popular4.png')}
-                                        style={styles.cryptoAssetIconImage}
-                                        resizeMode="contain"
-                                    />
-                                </View>
-                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                    <View style={styles.cryptoAssetContent}>
-                                        <ThemedText style={styles.cryptoAssetSymbol}>USDC</ThemedText>
-                                        <ThemedText style={styles.cryptoAssetName}>Circle USDC</ThemedText>
-                                    </View>
-                                    <View style={styles.cryptoAssetRight}>
-                                        <ThemedText style={styles.cryptoAssetAmount}>200</ThemedText>
-                                        <ThemedText style={styles.cryptoAssetValue}>$200</ThemedText>
-                                    </View>
-                                </View>
-                            </TouchableOpacity>
+                            )}
                         </View>
                     </>
                 ) : (
@@ -402,50 +411,106 @@ const WalletsScreen = () => {
 
                         {/* Transaction List */}
                         <View style={styles.transactionList}>
-                            {recentTransactions.map((transaction) => (
-                                <TouchableOpacity
-                                    key={transaction.id}
-                                    style={styles.transactionItem}
-                                    onPress={() => {
-                                        navigation.navigate('TransactionHistory', {
-                                            type: transaction.isDeposit ? 'deposit' : 'withdraw',
-                                            transactionData: transaction,
-                                        });
-                                    }}
-                                    activeOpacity={0.8}
-                                >
-                                    <View style={styles.transactionIcon}>
-                                        {transaction.isDeposit ? (
-                                            <Image
-                                                source={require('../../assets/sent (1).png')}
-                                                style={styles.transactionIconImage}
-                                                resizeMode="contain"
-                                            />
-                                        ) : (
-                                            <Image
-                                                source={require('../../assets/sent (2).png')}
-                                                style={styles.transactionIconImage}
-                                                resizeMode="contain"
-                                            />
-                                        )}
-                                    </View>
-                                    <View style={styles.transactionContent}>
-                                        <ThemedText style={styles.transactionType}>{transaction.type}</ThemedText>
-                                        <ThemedText style={styles.transactionStatus}>{transaction.status}</ThemedText>
-                                    </View>
-                                    <View style={styles.transactionRight}>
-                                        <ThemedText
-                                            style={[
-                                                styles.transactionAmount,
-                                                !transaction.isDeposit && styles.transactionAmountWithdrawal,
-                                            ]}
+                            {recentTransactions.length > 0 ? (
+                                recentTransactions.map((transaction: any) => {
+                                    const isDeposit = transaction.type === 'deposit' || transaction.category === 'fiat_deposit';
+                                    const transactionDate = transaction.created_at 
+                                        ? new Date(transaction.created_at).toLocaleDateString('en-NG', {
+                                            day: '2-digit',
+                                            month: 'short',
+                                            year: 'numeric',
+                                            hour: '2-digit',
+                                            minute: '2-digit',
+                                          })
+                                        : '';
+
+                                    // Determine transaction type
+                                    const getTransactionType = (transaction: any): 'deposit' | 'withdrawal' | 'bill_payment' | 'crypto' => {
+                                        if (transaction.type === 'deposit' || transaction.category === 'fiat_deposit') {
+                                            return 'deposit';
+                                        }
+                                        if (transaction.type === 'withdrawal' || transaction.category === 'fiat_withdrawal') {
+                                            return 'withdrawal';
+                                        }
+                                        if (transaction.category === 'bill_payment' || transaction.type === 'bill_payment') {
+                                            return 'bill_payment';
+                                        }
+                                        if (transaction.wallet_type === 'crypto' || transaction.category?.includes('crypto')) {
+                                            return 'crypto';
+                                        }
+                                        return 'deposit'; // default
+                                    };
+
+                                    return (
+                                        <TouchableOpacity
+                                            key={transaction.id}
+                                            style={styles.transactionItem}
+                                            onPress={() => {
+                                                const transactionType = getTransactionType(transaction);
+                                                navigation.navigate('TransactionHistory', {
+                                                    type: transactionType,
+                                                    transactionData: {
+                                                        ...transaction,
+                                                        transaction_id: transaction.transaction_id || transaction.id,
+                                                        id: transaction.id,
+                                                        wallet_type: transaction.wallet_type || 'fiat',
+                                                        // Ensure all required fields are present
+                                                        category: transaction.category,
+                                                        status: transaction.status,
+                                                        amount: transaction.amount,
+                                                        currency: transaction.currency || 'NGN',
+                                                        description: transaction.description,
+                                                        created_at: transaction.created_at,
+                                                        metadata: transaction.metadata,
+                                                    },
+                                                });
+                                            }}
+                                            activeOpacity={0.8}
                                         >
-                                            {transaction.amount}
-                                        </ThemedText>
-                                        <ThemedText style={styles.transactionDate}>{transaction.date}</ThemedText>
-                                    </View>
-                                </TouchableOpacity>
-                            ))}
+                                            <View style={styles.transactionIcon}>
+                                                {isDeposit ? (
+                                                    <Image
+                                                        source={require('../../assets/sent (1).png')}
+                                                        style={styles.transactionIconImage}
+                                                        resizeMode="contain"
+                                                    />
+                                                ) : (
+                                                    <Image
+                                                        source={require('../../assets/sent (2).png')}
+                                                        style={styles.transactionIconImage}
+                                                        resizeMode="contain"
+                                                    />
+                                                )}
+                                            </View>
+                                            <View style={styles.transactionContent}>
+                                                <ThemedText style={styles.transactionType}>
+                                                    {transaction.description || transaction.type || 'Transaction'}
+                                                </ThemedText>
+                                                <ThemedText style={styles.transactionStatus}>
+                                                    {transaction.status || 'Completed'}
+                                                </ThemedText>
+                                            </View>
+                                            <View style={styles.transactionRight}>
+                                                <ThemedText
+                                                    style={[
+                                                        styles.transactionAmount,
+                                                        !isDeposit && styles.transactionAmountWithdrawal,
+                                                    ]}
+                                                >
+                                                    {formatBalance(parseFloat(transaction.amount || 0), 'NGN')}
+                                                </ThemedText>
+                                                <ThemedText style={styles.transactionDate}>
+                                                    {transactionDate}
+                                                </ThemedText>
+                                            </View>
+                                        </TouchableOpacity>
+                                    );
+                                })
+                            ) : (
+                                <View style={styles.emptyContainer}>
+                                    <ThemedText style={styles.emptyText}>No recent transactions</ThemedText>
+                                </View>
+                            )}
                         </View>
                     </>
                 )}
@@ -461,7 +526,8 @@ const styles = StyleSheet.create({
     },
     topBackground: {
         width,
-        // paddingBottom: 40,
+        zIndex: 0,
+        position: 'relative',
     },
     header: {
         paddingTop: 50,
@@ -519,7 +585,9 @@ const styles = StyleSheet.create({
         marginTop: 20,
         marginHorizontal: 20,
         alignItems: 'center',
-        zIndex: 2,
+        zIndex: 1,
+        position: 'relative',
+        elevation: 1, // Android elevation
     },
     walletCard: {
         width: '100%',
@@ -529,8 +597,9 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         overflow: 'hidden',
-        zIndex: 2,
+        zIndex: 1,
         marginTop: -80,
+        elevation: 1, // Android elevation
     },
     brownImage: {
         width: '100%',
@@ -540,16 +609,23 @@ const styles = StyleSheet.create({
 
     },
     walletBalanceLabel: {
-        fontSize: 12,
+        fontSize: 10,
         fontWeight: '400',
         color: '#FFFFFF',
         marginBottom: 8,
         opacity: 0.9,
     },
     walletBalanceAmount: {
-        fontSize: 40,
+        fontSize: 25,
         fontWeight: '700',
         color: '#FFFFFF',
+    },
+    scrollViewContainer: {
+        marginTop: -20,
+        zIndex: 10,
+        backgroundColor: '#fff',
+        position: 'relative',
+        elevation: 5, // Android elevation
     },
     scrollContent: {
         paddingHorizontal: 20,
@@ -626,7 +702,7 @@ const styles = StyleSheet.create({
         height: 24,
     },
     actionButtonText: {
-        fontSize: 12,
+        fontSize: 10,
         fontWeight: '400',
         color: '#111827',
     },
@@ -642,7 +718,7 @@ const styles = StyleSheet.create({
         color: '#111827',
     },
     viewAllText: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '400',
         color: '#1B800F',
     },
@@ -674,7 +750,7 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     transactionType: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '400',
         color: '#111827',
         marginBottom: 4,
@@ -687,7 +763,7 @@ const styles = StyleSheet.create({
         alignItems: 'flex-end',
     },
     transactionAmount: {
-        fontSize: 14,
+        fontSize: 10,
         fontWeight: '400',
         color: '#1B800F',
         marginBottom: 4,
@@ -752,7 +828,7 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     cryptoAssetSymbol: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '400',
 
         marginBottom: 4,
@@ -766,7 +842,7 @@ const styles = StyleSheet.create({
         alignItems: 'flex-end',
     },
     cryptoAssetAmount: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '400',
         color: '#111827',
         marginBottom: 4,
@@ -775,6 +851,22 @@ const styles = StyleSheet.create({
         fontSize: 8,
         fontWeight: '400',
         color: '#6B7280',
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#FFFFFF',
+    },
+    emptyContainer: {
+        width: '100%',
+        padding: 20,
+        alignItems: 'center',
+    },
+    emptyText: {
+        fontSize: 14,
+        color: '#9CA3AF',
+        textAlign: 'center',
     },
 });
 

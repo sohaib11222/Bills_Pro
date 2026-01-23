@@ -5,6 +5,8 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { setOnboardingSeen } from '../../services/storage/appStorage';
+import { useAuth } from '../../services/context/AuthContext';
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -12,6 +14,14 @@ const { width, height } = Dimensions.get('window');
 
 const OnboardingScreen3 = () => {
   const navigation = useNavigation<RootNavigationProp>();
+  const { checkOnboarding } = useAuth();
+
+  const handleGetStarted = async () => {
+    // Mark onboarding as seen
+    await setOnboardingSeen(true);
+    await checkOnboarding();
+    navigation.navigate('Auth');
+  };
 
   return (
     <View style={styles.container}>
@@ -52,14 +62,14 @@ const OnboardingScreen3 = () => {
       <View style={styles.buttonContainer}>
         <TouchableOpacity 
           style={styles.skipButton}
-          onPress={() => navigation.navigate('Auth')}
+          onPress={handleGetStarted}
         >
           <ThemedText style={styles.skipButtonText}>Skip</ThemedText>
         </TouchableOpacity>
         
         <TouchableOpacity 
           style={styles.nextButton}
-          onPress={() => navigation.navigate('Auth')}
+          onPress={handleGetStarted}
         >
           <ThemedText style={styles.nextButtonText}>Get Started</ThemedText>
           <View style={styles.circleContainer}>

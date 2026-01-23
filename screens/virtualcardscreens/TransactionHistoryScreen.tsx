@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -7,6 +7,11 @@ import {
   ScrollView,
   Dimensions,
   TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+  Share,
+  Platform,
+  Linking,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +20,9 @@ import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
 import type { RouteProp } from '@react-navigation/native';
+import { useTransactionDetails } from '../../queries/transactionQueries';
+import ViewShot from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
 
 const { width } = Dimensions.get('window');
 
@@ -25,41 +33,327 @@ const TransactionHistoryScreen = () => {
   const navigation = useNavigation<RootNavigationProp>();
   const route = useRoute<TransactionHistoryRouteProp>();
   const transactionType = route.params?.type || route.params?.transactionData?.type || 'funding';
-  const transactionData = route.params?.transactionData;
+  const routeTransactionData = route.params?.transactionData;
+  const viewShotRef = useRef<ViewShot>(null);
+  
+  // Get transaction ID from route data
+  const transactionId = routeTransactionData?.transaction_id || routeTransactionData?.id;
+  const walletType = routeTransactionData?.wallet_type;
+  const isVirtualCardTransaction = walletType === 'virtual_card' || 
+                                   transactionType === 'virtual_card' ||
+                                   ['card_funding', 'card_withdrawal'].includes(routeTransactionData?.type);
+  
+  // Log received transaction data
+  console.log('🟢 TransactionHistoryScreen - Received route data:', {
+    transactionId,
+    walletType,
+    transactionType,
+    isVirtualCardTransaction,
+    routeTransactionData: routeTransactionData ? {
+      transaction_id: routeTransactionData.transaction_id,
+      id: routeTransactionData.id,
+      type: routeTransactionData.type,
+      wallet_type: routeTransactionData.wallet_type,
+      amount: routeTransactionData.amount,
+      currency: routeTransactionData.currency,
+      status: routeTransactionData.status,
+      metadata: routeTransactionData.metadata,
+    } : null,
+  });
+  
+  // For virtual card transactions, don't fetch via regular transaction endpoint
+  // as they might not exist in the Transaction model
+  // Instead, use the route data directly
+  const shouldFetchDetails = !!transactionId && !isVirtualCardTransaction;
+  
+  // Fetch transaction details if we have an ID and it's not a virtual card transaction
+  const { 
+    data: transactionDetailsData, 
+    isLoading, 
+    error 
+  } = useTransactionDetails(shouldFetchDetails ? transactionId : '');
+  
+  // Use API data if available, otherwise fall back to route data
+  const transactionData = useMemo(() => {
+    if (transactionDetailsData?.data && !isVirtualCardTransaction) {
+      console.log('🟡 Using fetched transaction details data');
+      return transactionDetailsData.data;
+    }
+    // For virtual card transactions, use route data directly
+    if (isVirtualCardTransaction && routeTransactionData) {
+      console.log('🟡 Using route transaction data for virtual card:', {
+        transaction_id: routeTransactionData.transaction_id,
+        id: routeTransactionData.id,
+        type: routeTransactionData.type,
+        amount: routeTransactionData.amount,
+        currency: routeTransactionData.currency,
+        metadata: routeTransactionData.metadata,
+      });
+      return routeTransactionData;
+    }
+    console.log('🟡 Using route transaction data as fallback');
+    return routeTransactionData;
+  }, [transactionDetailsData, routeTransactionData, isVirtualCardTransaction]);
+  
+  // Loading state (only show if we're actually fetching)
+  if (isLoading && shouldFetchDetails && !routeTransactionData) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <StatusBar style="dark" />
+        <ActivityIndicator size="large" color="#1B800F" />
+        <ThemedText style={{ marginTop: 16, color: '#6B7280' }}>Loading transaction...</ThemedText>
+      </View>
+    );
+  }
+  
+  // Error state (only show if we tried to fetch and failed, and have no route data)
+  // For virtual card transactions, ignore API errors since we use route data
+  if (error && shouldFetchDetails && !routeTransactionData && !isVirtualCardTransaction) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 20 }]}>
+        <StatusBar style="dark" />
+        <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+        <ThemedText style={{ marginTop: 16, color: '#EF4444', textAlign: 'center' }}>
+          Failed to load transaction
+        </ThemedText>
+        <TouchableOpacity
+          style={[styles.backButton, { marginTop: 20 }]}
+          onPress={() => navigation.goBack()}
+        >
+          <ThemedText style={{ color: '#1B800F' }}>Go Back</ThemedText>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+  
+  if (!transactionData) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 20 }]}>
+        <StatusBar style="dark" />
+        <ThemedText style={{ color: '#6B7280', textAlign: 'center' }}>
+          Transaction not found
+        </ThemedText>
+        <TouchableOpacity
+          style={[styles.backButton, { marginTop: 20 }]}
+          onPress={() => navigation.goBack()}
+        >
+          <ThemedText style={{ color: '#1B800F' }}>Go Back</ThemedText>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+  
+  // Determine transaction type from API data
+  const txType = transactionData?.type || '';
+  const txCategory = transactionData?.category || '';
+  // walletType is already declared above, use it from transactionData if available
+  const finalWalletType = (transactionData as any)?.wallet_type || walletType;
   
   // Determine if it's a deposit or withdrawal based on transaction type
   const isDeposit = transactionType === 'deposit' || transactionType === 'funding' || 
-                    transactionData?.type === 'Funds Deposit';
+                    txType === 'deposit' || txType === 'crypto_buy' || txType === 'card_funding';
   const isWithdrawal = transactionType === 'withdrawal' || transactionType === 'withdraw' || 
-                       transactionData?.type === 'Funds Withdrawal';
-  const isBillPayment = transactionType === 'bill_payment' || !!(transactionData as any)?.category;
-  const isCrypto = transactionType === 'crypto' || !!(transactionData as any)?.cryptoType;
-  const isVirtualCard = transactionType === 'virtual_card' || !!(transactionData as any)?.virtualCardType;
+                       txType === 'withdrawal' || txType === 'crypto_withdrawal' || txType === 'card_withdrawal';
+  const isBillPayment = transactionType === 'bill_payment' || txType === 'bill_payment' || 
+                        ['airtime', 'data', 'electricity', 'cable_tv', 'internet', 'betting'].includes(txCategory);
+  const isCrypto = transactionType === 'crypto' || finalWalletType === 'crypto' || 
+                   ['crypto_buy', 'crypto_sell', 'crypto_withdrawal'].includes(txType);
+  const isVirtualCard = transactionType === 'virtual_card' || finalWalletType === 'virtual_card' || 
+                        ['card_funding', 'card_withdrawal'].includes(txType);
   
-  // Get bill payment type
-  const billPaymentType = transactionData?.type || '';
-  const isAirtime = billPaymentType === 'Airtime Recharge';
-  const isData = billPaymentType === 'Data Recharge';
-  const isElectricity = billPaymentType === 'Electricity Recharge';
-  const isCableTV = billPaymentType === 'Cable TV';
-  const isBetting = billPaymentType === 'Betting';
-  const isInternet = billPaymentType === 'Internet Subscription';
+  // Get bill payment type from category
+  const isAirtime = txCategory === 'airtime' || (transactionData as any)?.type === 'Airtime Recharge';
+  const isData = txCategory === 'data' || (transactionData as any)?.type === 'Data Recharge';
+  const isElectricity = txCategory === 'electricity' || (transactionData as any)?.type === 'Electricity Recharge';
+  const isCableTV = txCategory === 'cable_tv' || (transactionData as any)?.type === 'Cable TV';
+  const isBetting = txCategory === 'betting' || (transactionData as any)?.type === 'Betting';
+  const isInternet = txCategory === 'internet' || (transactionData as any)?.type === 'Internet Subscription';
   
-  // Get crypto transaction type
-  const cryptoType = (transactionData as any)?.cryptoType || '';
-  const isCryptoReceive = cryptoType === 'Receive';
-  const isCryptoSend = cryptoType === 'Send';
-  const isCryptoBuy = cryptoType === 'Buy';
-  const isCryptoSell = cryptoType === 'Sell';
+  // Get crypto transaction type from API type
+  const isCryptoReceive = txType === 'crypto_buy';
+  const isCryptoSend = txType === 'crypto_withdrawal';
+  const isCryptoBuy = txType === 'crypto_buy';
+  const isCryptoSell = txType === 'crypto_sell';
   
-  // Get virtual card transaction type
-  const virtualCardType = (transactionData as any)?.virtualCardType || '';
-  const isCardFunding = virtualCardType === 'Fund' || (transactionData as any)?.type === 'Card Funding';
-  const isCardWithdrawal = virtualCardType === 'Withdraw' || (transactionData as any)?.type === 'Card Withdrawal';
-  const isCardPayment = virtualCardType === 'Payments' || (transactionData as any)?.type?.includes('Card Payment');
+  // Get virtual card transaction type from API type
+  const isCardFunding = txType === 'card_funding' || (transactionData as any)?.type === 'Card Funding';
+  const isCardWithdrawal = txType === 'card_withdrawal' || (transactionData as any)?.type === 'Card Withdrawal';
+  const isCardPayment = txType === 'card_withdrawal' && (transactionData?.metadata as any)?.paymentReason;
   
-  const amount = transactionData?.amount ? `N${transactionData.amount}` : (isBillPayment ? 'N5,000' : isCrypto ? '' : 'N200,000');
-  const date = transactionData?.date || '6th Nov, 2025 - 07:22 AM';
+  // Format amount and date from API data
+  const formatAmount = () => {
+    if (!transactionData?.amount) return isBillPayment ? 'N5,000' : isCrypto ? '' : 'N200,000';
+    const currency = transactionData.currency || 'NGN';
+    if (currency === 'NGN') {
+      return `₦${Number(transactionData.amount).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    } else if (currency === 'USD') {
+      return `$${Number(transactionData.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    return `${Number(transactionData.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
+  };
+
+  const formatDate = (dateString?: string): string => {
+    if (!dateString && transactionData?.created_at) {
+      dateString = transactionData.created_at;
+    }
+    if (!dateString) return '6th Nov, 2025 - 07:22 AM';
+    
+    try {
+      const date = new Date(dateString);
+      const day = date.getDate();
+      const month = date.toLocaleString('en-US', { month: 'short' });
+      const year = date.getFullYear();
+      const hours = date.getHours();
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      const ampm = hours >= 12 ? 'AM' : 'AM';
+      const displayHours = hours % 12 || 12;
+      return `${day}${getOrdinalSuffix(day)} ${month}, ${year} - ${displayHours}:${minutes} ${ampm}`;
+    } catch {
+      return dateString;
+    }
+  };
+
+  const getOrdinalSuffix = (day: number): string => {
+    if (day > 3 && day < 21) return 'th';
+    switch (day % 10) {
+      case 1: return 'st';
+      case 2: return 'nd';
+      case 3: return 'rd';
+      default: return 'th';
+    }
+  };
+
+  const amount = formatAmount();
+  const date = formatDate(transactionData?.date);
+  
+  // Log complete transaction data for debugging
+  if (isVirtualCard) {
+    console.log('🟣 Complete Virtual Card Transaction Data:', {
+      transaction_id: transactionData?.transaction_id,
+      id: transactionData?.id,
+      type: transactionData?.type,
+      wallet_type: transactionData?.wallet_type,
+      amount: transactionData?.amount,
+      currency: transactionData?.currency,
+      fee: transactionData?.fee,
+      total_amount: transactionData?.total_amount,
+      status: transactionData?.status,
+      reference: transactionData?.reference,
+      description: transactionData?.description,
+      metadata: transactionData?.metadata,
+      created_at: transactionData?.created_at,
+      fullTransactionData: transactionData,
+    });
+  }
+  
+  // Helper functions for virtual card transaction data
+  const getVirtualCardMetadata = () => {
+    const metadata = (transactionData as any)?.metadata || {};
+    console.log('🔵 Virtual Card Metadata:', {
+      metadata,
+      hasExchangeRate: !!metadata.exchange_rate,
+      hasPaymentWalletType: !!metadata.payment_wallet_type,
+      hasAmountUsd: !!metadata.amount_usd,
+    });
+    return metadata;
+  };
+
+  const formatVirtualCardAmount = (amountValue: number | string, currency: string = 'USD') => {
+    const numAmount = Number(amountValue) || 0;
+    console.log('🔵 Formatting amount:', { amountValue, numAmount, currency });
+    if (currency === 'USD') {
+      return `$${numAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    } else if (currency === 'NGN') {
+      return `₦${numAmount.toLocaleString('en-NG', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    }
+    return `${numAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
+  };
+
+  const getExchangeRate = () => {
+    const metadata = getVirtualCardMetadata();
+    const rate = metadata.exchange_rate || metadata.exchangeRate;
+    if (rate) {
+      return `₦${Number(rate).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} = $1`;
+    }
+    return 'N1,500 = $1'; // Fallback
+  };
+
+  const getPaymentWalletType = () => {
+    const metadata = getVirtualCardMetadata();
+    const walletType = metadata.payment_wallet_type || metadata.paymentWalletType;
+    if (walletType === 'naira_wallet') return 'Naira Wallet';
+    if (walletType === 'crypto') return 'Crypto Wallet';
+    return 'Naira Wallet'; // Default
+  };
+
+  const getPaymentWalletCurrency = () => {
+    const metadata = getVirtualCardMetadata();
+    return metadata.payment_wallet_currency || metadata.paymentWalletCurrency || 'NGN';
+  };
+
+  const getAmountInPaymentCurrency = () => {
+    const metadata = getVirtualCardMetadata();
+    const paymentCurrency = getPaymentWalletCurrency();
+    
+    if (isCardFunding) {
+      // For card funding from Transaction model: amount is in payment currency
+      // For card funding from VirtualCardTransaction model: amount is in USD
+      if (transactionData?.currency === paymentCurrency) {
+        // From Transaction model - amount is already in payment currency
+        return formatVirtualCardAmount(transactionData?.amount || 0, paymentCurrency);
+      } else {
+        // From VirtualCardTransaction model - amount is in USD, need to convert
+        const usdAmount = Number(transactionData?.amount) || 0;
+        const exchangeRate = Number(metadata.exchange_rate || metadata.exchangeRate) || 1500;
+        const ngnAmount = usdAmount * exchangeRate;
+        return formatVirtualCardAmount(ngnAmount, paymentCurrency);
+      }
+    } else if (isCardWithdrawal) {
+      // For withdrawal from Transaction model: amount is NGN (amount received)
+      // For withdrawal from VirtualCardTransaction model: amount is USD
+      if (transactionData?.currency === 'NGN') {
+        // From Transaction model - amount is already in NGN (amount received)
+        return formatVirtualCardAmount(transactionData?.amount || 0, 'NGN');
+      } else {
+        // From VirtualCardTransaction model - amount is in USD, calculate NGN
+        const usdAmount = Number(transactionData?.amount) || 0;
+        const exchangeRate = Number(metadata.exchange_rate || metadata.exchangeRate) || 1500;
+        const ngnAmount = usdAmount * exchangeRate;
+        return formatVirtualCardAmount(ngnAmount, 'NGN');
+      }
+    }
+    
+    return formatVirtualCardAmount(transactionData?.amount || 0, transactionData?.currency || 'USD');
+  };
+
+  const getFeeInPaymentCurrency = () => {
+    const fee = Number(transactionData?.fee) || 0;
+    if (isCardFunding) {
+      const paymentCurrency = getPaymentWalletCurrency();
+      return formatVirtualCardAmount(fee, paymentCurrency);
+    } else if (isCardWithdrawal) {
+      // Fee is in NGN for withdrawals
+      return formatVirtualCardAmount(fee, 'NGN');
+    }
+    return formatVirtualCardAmount(fee, transactionData?.currency || 'USD');
+  };
+
+  const getTotalAmountInPaymentCurrency = () => {
+    const totalAmount = Number(transactionData?.total_amount) || 0;
+    if (isCardFunding) {
+      const paymentCurrency = getPaymentWalletCurrency();
+      return formatVirtualCardAmount(totalAmount, paymentCurrency);
+    } else if (isCardWithdrawal) {
+      // For withdrawal, total_amount is the NGN amount (including fee) that was converted
+      return formatVirtualCardAmount(totalAmount, 'NGN');
+    }
+    return formatVirtualCardAmount(totalAmount, transactionData?.currency || 'USD');
+  };
+
+  const getPaymentReason = () => {
+    const metadata = getVirtualCardMetadata();
+    return metadata.paymentReason || metadata.payment_reason || metadata.merchant_name || metadata.merchantName || 'N/A';
+  };
   
   // Get success message based on transaction type
   const getSuccessMessage = () => {
@@ -97,23 +391,112 @@ const TransactionHistoryScreen = () => {
   
   // Get crypto symbol for display
   const getCryptoSymbol = () => {
-    if (transactionData?.type?.includes('BTC')) return 'BTC';
-    if (transactionData?.type?.includes('ETH')) return 'ETH';
-    if (transactionData?.type?.includes('USDT')) return 'USDT';
-    if (transactionData?.type?.includes('USDC')) return 'USDC';
-    return 'BTC';
+    const currency = transactionData?.currency || '';
+    if (currency.includes('BTC') || currency === 'BTC') return 'BTC';
+    if (currency.includes('ETH') || currency === 'ETH') return 'ETH';
+    if (currency.includes('USDT') || currency === 'USDT') return 'USDT';
+    if (currency.includes('USDC') || currency === 'USDC') return 'USDC';
+    return currency || 'BTC';
   };
   
   // Get crypto amount for display
   const getCryptoAmount = () => {
-    if (isCrypto && isCryptoSend) {
-      const amountValue = transactionData?.amount || '0.00023';
-      return `${amountValue} ${getCryptoSymbol()}`;
-    }
     if (isCrypto) {
-      return (transactionData as any)?.cryptoAmount || '0.00023 BTC';
+      const amountValue = transactionData?.amount || 0;
+      const symbol = getCryptoSymbol();
+      return `${amountValue} ${symbol}`;
     }
     return amount;
+  };
+  
+  // Get metadata for display
+  const metadata = transactionData?.metadata || {};
+  const getBillPaymentDetails = () => {
+    if (isBillPayment) {
+      return {
+        phoneNumber: metadata.phoneNumber || metadata.phone_number,
+        billerType: metadata.provider || metadata.billerName,
+        decoderNumber: metadata.decoderNumber || metadata.decoder_number,
+        dataPlan: metadata.planName || metadata.plan_name,
+        accountName: metadata.accountName || metadata.account_name,
+        meterNumber: metadata.meterNumber || metadata.meter_number,
+        accountType: metadata.accountType || metadata.account_type,
+      };
+    }
+    return {};
+  };
+  
+  const billPaymentDetails = getBillPaymentDetails();
+
+  // Handle screenshot capture and share
+  const handleShareReceipt = async () => {
+    if (isCrypto) {
+      // For crypto transactions, open blockchain explorer if txHash exists
+      const txHash = (transactionData as any)?.txHash || (transactionData as any)?.transaction_hash;
+      if (txHash) {
+        // Determine blockchain and open appropriate explorer
+        const network = (transactionData as any)?.network || 'bitcoin';
+        const currency = transactionData?.currency || 'BTC';
+        let explorerUrl = '';
+        
+        if (currency.includes('BTC') || currency === 'BTC') {
+          explorerUrl = `https://blockstream.info/tx/${txHash}`;
+        } else if (currency.includes('ETH') || currency === 'ETH') {
+          explorerUrl = `https://etherscan.io/tx/${txHash}`;
+        } else if (currency.includes('USDT') || currency === 'USDT') {
+          // USDT can be on multiple chains, default to Ethereum
+          explorerUrl = `https://etherscan.io/tx/${txHash}`;
+        } else {
+          explorerUrl = `https://blockstream.info/tx/${txHash}`;
+        }
+        
+        try {
+          await Linking.openURL(explorerUrl);
+        } catch (error) {
+          Alert.alert('Error', 'Unable to open blockchain explorer');
+        }
+      } else {
+        Alert.alert('Info', 'Transaction hash not available');
+      }
+      return;
+    }
+
+    // For non-crypto transactions, capture screenshot and share
+    try {
+      const viewShot = viewShotRef.current;
+      if (!viewShot || !viewShot.capture) {
+        Alert.alert('Error', 'Unable to capture receipt');
+        return;
+      }
+
+      // Capture the screenshot
+      const uri = await viewShot.capture();
+      
+      if (!uri) {
+        Alert.alert('Error', 'Failed to capture screenshot');
+        return;
+      }
+
+      // Check if sharing is available
+      const isAvailable = await Sharing.isAvailableAsync();
+      
+      if (isAvailable) {
+        // Share the image
+        await Sharing.shareAsync(uri, {
+          mimeType: 'image/png',
+          dialogTitle: 'Share Transaction Receipt',
+        });
+      } else {
+        // Fallback to React Native Share API
+        await Share.share({
+          message: 'Transaction Receipt',
+          url: uri,
+        });
+      }
+    } catch (error: any) {
+      console.error('Error sharing receipt:', error);
+      Alert.alert('Error', error.message || 'Failed to share receipt');
+    }
   };
 
   return (
@@ -154,23 +537,34 @@ const TransactionHistoryScreen = () => {
         </View>
       </ImageBackground>
       
-      <View style={styles.successMessageContainer}>
-        <ThemedText style={styles.successTitle}>Success</ThemedText>
-        <ThemedText style={styles.successMessage}>
-          {getSuccessMessage()}
-          <ThemedText style={styles.successAmount}>
-            {isCrypto ? getCryptoAmount() : isVirtualCard ? (transactionData as any)?.amount || '$10' : amount}
-          </ThemedText>
-          {getVirtualCardWithdrawalSuffix()}
-        </ThemedText>
-      </View>
-
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* Transaction Details Card */}
-        <View style={styles.detailsCard}>
+        {/* Receipt Content - Wrapped in ViewShot for screenshot capture */}
+        <ViewShot
+          ref={viewShotRef}
+          options={{
+            format: 'png',
+            quality: 0.9,
+            result: 'tmpfile',
+          }}
+          style={styles.viewShotContainer}
+        >
+          {/* Success Message */}
+          <View style={styles.successMessageContainer}>
+            <ThemedText style={styles.successTitle}>Success</ThemedText>
+            <ThemedText style={styles.successMessage}>
+              {getSuccessMessage()}
+              <ThemedText style={styles.successAmount}>
+                {isCrypto ? getCryptoAmount() : isVirtualCard ? formatVirtualCardAmount(transactionData?.amount || 0, transactionData?.currency || 'USD') : amount}
+              </ThemedText>
+              {getVirtualCardWithdrawalSuffix()}
+            </ThemedText>
+          </View>
+
+          {/* Transaction Details Card */}
+          <View style={styles.detailsCard}>
           {/* Virtual Card Transaction Fields */}
           {isVirtualCard ? (
             <>
@@ -178,27 +572,29 @@ const TransactionHistoryScreen = () => {
                 <>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Amount to fund</ThemedText>
-                    <ThemedText style={styles.detailValue}>{(transactionData as any)?.amount || '$10'}</ThemedText>
+                    <ThemedText style={styles.detailValue}>
+                      {formatVirtualCardAmount(transactionData?.amount || 0, transactionData?.currency || 'USD')}
+                    </ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Payment method</ThemedText>
-                    <ThemedText style={styles.detailValue}>Naira Wallet</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getPaymentWalletType()}</ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Exchange Rate</ThemedText>
-                    <ThemedText style={styles.detailValue}>N1,500 = $1</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getExchangeRate()}</ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Amount to pay</ThemedText>
-                    <ThemedText style={styles.detailValue}>N15,000</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getAmountInPaymentCurrency()}</ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Fee</ThemedText>
-                    <ThemedText style={styles.detailValue}>N500</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getFeeInPaymentCurrency()}</ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Total Amount</ThemedText>
-                    <ThemedText style={styles.detailValue}>N15,500</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getTotalAmountInPaymentCurrency()}</ThemedText>
                   </View>
                 </>
               )}
@@ -206,23 +602,25 @@ const TransactionHistoryScreen = () => {
                 <>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Amount to withdraw</ThemedText>
-                    <ThemedText style={styles.detailValue}>{(transactionData as any)?.amount || '$10'}</ThemedText>
+                    <ThemedText style={styles.detailValue}>
+                      {formatVirtualCardAmount(transactionData?.amount || 0, transactionData?.currency || 'USD')}
+                    </ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Exchange Rate</ThemedText>
-                    <ThemedText style={styles.detailValue}>N1,500 = $1</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getExchangeRate()}</ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Amount you will receive</ThemedText>
-                    <ThemedText style={styles.detailValue}>N15,000</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getAmountInPaymentCurrency()}</ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Fee</ThemedText>
-                    <ThemedText style={styles.detailValue}>N500</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getFeeInPaymentCurrency()}</ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Total Amount</ThemedText>
-                    <ThemedText style={styles.detailValue}>N15,500</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getTotalAmountInPaymentCurrency()}</ThemedText>
                   </View>
                 </>
               )}
@@ -230,19 +628,25 @@ const TransactionHistoryScreen = () => {
                 <>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Amount</ThemedText>
-                    <ThemedText style={styles.detailValue}>{(transactionData as any)?.amount || '$10'}</ThemedText>
+                    <ThemedText style={styles.detailValue}>
+                      {formatVirtualCardAmount(transactionData?.amount || 0, transactionData?.currency || 'USD')}
+                    </ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Fee</ThemedText>
-                    <ThemedText style={styles.detailValue}>$0.1</ThemedText>
+                    <ThemedText style={styles.detailValue}>
+                      {formatVirtualCardAmount(transactionData?.fee || 0, transactionData?.currency || 'USD')}
+                    </ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Total Amount</ThemedText>
-                    <ThemedText style={styles.detailValue}>$10.10</ThemedText>
+                    <ThemedText style={styles.detailValue}>
+                      {formatVirtualCardAmount(transactionData?.total_amount || transactionData?.amount || 0, transactionData?.currency || 'USD')}
+                    </ThemedText>
                   </View>
                   <View style={styles.detailRow}>
                     <ThemedText style={styles.detailLabel}>Payment reason</ThemedText>
-                    <ThemedText style={styles.detailValue}>{(transactionData as any)?.paymentReason || 'Paypal'}</ThemedText>
+                    <ThemedText style={styles.detailValue}>{getPaymentReason()}</ThemedText>
                   </View>
                 </>
               )}
@@ -636,21 +1040,26 @@ const TransactionHistoryScreen = () => {
             <ThemedText style={styles.detailLabel}>Date</ThemedText>
             <ThemedText style={styles.detailValue}>{date}</ThemedText>
           </View>
-        </View>
-        
-        {/* Token Section for Electricity */}
-        {isElectricity && (transactionData as any)?.token && (
-          <View style={styles.tokenCard}>
-            <ThemedText style={styles.tokenLabel}>Token</ThemedText>
-            <ThemedText style={styles.tokenValue}>{(transactionData as any).token}</ThemedText>
-            <TouchableOpacity style={styles.copyTokenButton}>
-              <ThemedText style={styles.copyTokenButtonText}>Copy Token</ThemedText>
-            </TouchableOpacity>
+          
+          {/* Token Section for Electricity */}
+          {isElectricity && (transactionData as any)?.token && (
+            <View style={styles.tokenCard}>
+              <ThemedText style={styles.tokenLabel}>Token</ThemedText>
+              <ThemedText style={styles.tokenValue}>{(transactionData as any).token}</ThemedText>
+              <TouchableOpacity style={styles.copyTokenButton}>
+                <ThemedText style={styles.copyTokenButtonText}>Copy Token</ThemedText>
+              </TouchableOpacity>
+            </View>
+          )}
           </View>
-        )}
+        </ViewShot>
 
         {/* Share Receipt or View on Blockchain Button */}
-        <TouchableOpacity style={styles.shareButton}>
+        <TouchableOpacity 
+          style={styles.shareButton}
+          onPress={handleShareReceipt}
+          activeOpacity={0.7}
+        >
           <ThemedText style={styles.shareButtonText}>
             {isCrypto ? 'View on blockchain' : 'Share Receipt'}
           </ThemedText>
@@ -738,6 +1147,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 10,
+    paddingBottom: 24,
   },
   successMessage: {
     fontSize: 14,
@@ -754,6 +1164,9 @@ const styles = StyleSheet.create({
     paddingTop: 24,
     paddingBottom: 40,
   },
+  viewShotContainer: {
+    backgroundColor: '#FFFFFF',
+  },
   detailsCard: {
     backgroundColor: '#F3F4F6',
     borderRadius: 20,
@@ -768,11 +1181,11 @@ const styles = StyleSheet.create({
    
   },
   detailLabel: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#6B7280',
   },
   detailValue: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '500',
     color: '#111827',
   },
@@ -794,7 +1207,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   shareButtonText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '400',
     color: '#111827',
   },

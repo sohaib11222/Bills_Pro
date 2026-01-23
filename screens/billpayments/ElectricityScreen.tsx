@@ -10,34 +10,39 @@ import {
     Dimensions,
     Modal,
     Pressable,
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useBillPaymentProviders, useBillPaymentBeneficiaries } from '../../queries/billPaymentQueries';
+import { useValidateMeter, useInitiateBillPayment, useConfirmBillPayment, useCreateBeneficiary, useDeleteBeneficiary } from '../../mutations/billPaymentMutations';
+import { useFiatWallets } from '../../queries/walletQueries';
 
 const { width, height } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-const billers = [
-    { id: 'Ikeja Electricity', name: 'Ikeja Electricity' },
-    { id: 'Ibadan Electricity', name: 'Ibadan Electricity' },
-    { id: 'Abuja Electricity', name: 'Abuja Electricity' },
-];
+const CATEGORY_CODE = 'electricity';
 
 const accountTypes = [
-    { id: 'Prepaid', name: 'Prepaid' },
-    { id: 'Postpaid', name: 'Postpaid' },
+    { id: 'prepaid', name: 'Prepaid' },
+    { id: 'postpaid', name: 'Postpaid' },
 ];
 
 const ElectricityScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const [amount, setAmount] = useState('');
-    const [selectedBiller, setSelectedBiller] = useState<string | null>(null);
-    const [selectedAccountType, setSelectedAccountType] = useState<string | null>(null);
+    const [selectedProviderId, setSelectedProviderId] = useState<number | null>(null);
+    const [selectedProviderName, setSelectedProviderName] = useState<string | null>(null);
+    const [selectedAccountType, setSelectedAccountType] = useState<'prepaid' | 'postpaid' | null>(null);
     const [meterNumber, setMeterNumber] = useState('');
     const [showBillerModal, setShowBillerModal] = useState(false);
     const [showAccountTypeModal, setShowAccountTypeModal] = useState(false);
@@ -46,6 +51,31 @@ const ElectricityScreen = () => {
     const [showSecurityModal, setShowSecurityModal] = useState(false);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [pin, setPin] = useState('');
+    const [accountName, setAccountName] = useState<string | null>(null);
+    const [transactionId, setTransactionId] = useState<number | null>(null);
+    const [transactionReference, setTransactionReference] = useState<string | null>(null);
+    const [fee, setFee] = useState<number>(0);
+    const [totalAmount, setTotalAmount] = useState<number>(0);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [showSaveBeneficiaryModal, setShowSaveBeneficiaryModal] = useState(false);
+    const [showManageBeneficiariesModal, setShowManageBeneficiariesModal] = useState(false);
+    const [beneficiaryName, setBeneficiaryName] = useState('');
+
+    // API Hooks
+    const { data: providersData, isLoading: providersLoading } = useBillPaymentProviders(CATEGORY_CODE, 'NG');
+    const { data: beneficiariesData, isLoading: beneficiariesLoading } = useBillPaymentBeneficiaries();
+    const { data: walletsData, isLoading: walletsLoading } = useFiatWallets();
+    const validateMeterMutation = useValidateMeter();
+    const initiateMutation = useInitiateBillPayment();
+    const confirmMutation = useConfirmBillPayment();
+    const createBeneficiaryMutation = useCreateBeneficiary();
+    const deleteBeneficiaryMutation = useDeleteBeneficiary();
+
+    const providers = providersData?.data || [];
+    const beneficiaries = beneficiariesData?.data || [];
+    const fiatWallets = walletsData?.data || [];
+    const ngnWallet = fiatWallets.find((w: any) => w.currency === 'NGN');
+    const balance = ngnWallet?.balance || 0;
 
     const handleNumberPress = (num: string) => {
         if (pin.length < 4) {
@@ -57,40 +87,279 @@ const ElectricityScreen = () => {
         setPin(pin.slice(0, -1));
     };
 
-    const handleProceed = () => {
-        if (selectedBiller && selectedAccountType && meterNumber && amount) {
-            setShowSummaryModal(true);
+    const handleProceed = async () => {
+        if (!selectedProviderId || !selectedAccountType || !meterNumber || !amount) {
+            Alert.alert('Error', 'Please select biller, account type, enter meter number and amount');
+            return;
+        }
+
+        const numericAmount = parseFloat(amount.replace(/,/g, ''));
+        if (isNaN(numericAmount) || numericAmount <= 0) {
+            Alert.alert('Error', 'Please enter a valid amount');
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            // Validate meter first
+            const validateResult = await validateMeterMutation.mutateAsync({
+                providerId: selectedProviderId,
+                meterNumber: meterNumber,
+                accountType: selectedAccountType,
+            });
+
+            if (!validateResult.success) {
+                Alert.alert('Validation Failed', validateResult.message || 'Invalid meter details');
+                setIsProcessing(false);
+                return;
+            }
+
+            const validatedAccountName = validateResult.data?.accountName || null;
+            setAccountName(validatedAccountName);
+
+            // Initiate payment
+            const initiateResult = await initiateMutation.mutateAsync({
+                categoryCode: CATEGORY_CODE,
+                providerId: selectedProviderId,
+                currency: 'NGN',
+                amount: numericAmount,
+                accountNumber: meterNumber,
+                accountType: selectedAccountType,
+            });
+
+            if (initiateResult.success && initiateResult.data) {
+                setTransactionId(initiateResult.data.transactionId);
+                setTransactionReference(initiateResult.data.reference);
+                setFee(initiateResult.data.fee || 0);
+                setTotalAmount(initiateResult.data.totalAmount || numericAmount);
+                setShowSummaryModal(true);
+            } else {
+                Alert.alert('Error', initiateResult.message || 'Failed to initiate payment');
+            }
+        } catch (error: any) {
+            console.error('Electricity initiate error:', error);
+            Alert.alert(
+                'Error',
+                error?.response?.data?.message || error?.message || 'Failed to initiate payment. Please try again.'
+            );
+        } finally {
+            setIsProcessing(false);
         }
     };
 
     const handleSummaryProceed = () => {
         setShowSummaryModal(false);
         setShowSecurityModal(true);
+        setPin('');
     };
 
-    const handleSecurityNext = () => {
-        if (pin.length === 4) {
-            setShowSecurityModal(false);
-            setShowSuccessModal(true);
+    // Handle biometric authentication for security
+    const handleSecurityBiometric = async () => {
+        // Validate that PIN is entered
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a 4-digit PIN first');
+            return;
         }
+
+        if (!transactionId) {
+            Alert.alert('Error', 'Transaction ID is missing');
+            return;
+        }
+
+        try {
+            // Check if biometric hardware is available
+            const compatible = await LocalAuthentication.hasHardwareAsync();
+            if (!compatible) {
+                Alert.alert(
+                    'Biometric Not Available',
+                    'Biometric authentication is not available on this device. Please use the Next button instead.'
+                );
+                return;
+            }
+
+            // Check if biometrics are enrolled
+            const enrolled = await LocalAuthentication.isEnrolledAsync();
+            if (!enrolled) {
+                Alert.alert(
+                    'Biometric Not Set Up',
+                    'Please set up biometric authentication (fingerprint or face ID) in your device settings first.'
+                );
+                return;
+            }
+
+            // Authenticate using biometrics
+            const result = await LocalAuthentication.authenticateAsync({
+                promptMessage: 'Authenticate to confirm payment',
+                cancelLabel: 'Cancel',
+                disableDeviceFallback: false,
+            });
+
+            if (result.success) {
+                // Biometric authentication successful, proceed with security next
+                await handleSecurityNext();
+            } else {
+                // User cancelled or authentication failed
+                if (result.error === 'user_cancel') {
+                    // User cancelled, don't show error
+                    return;
+                } else {
+                    Alert.alert('Authentication Failed', 'Biometric authentication failed. Please try again.');
+                }
+            }
+        } catch (error: any) {
+            console.error('Biometric authentication error:', error);
+            Alert.alert('Error', 'An error occurred during biometric authentication. Please try again.');
+        }
+    };
+
+    const handleSecurityNext = async () => {
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a 4-digit PIN');
+            return;
+        }
+
+        if (!transactionId) {
+            Alert.alert('Error', 'Transaction ID is missing');
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const result = await confirmMutation.mutateAsync({
+                transactionId: transactionId,
+                pin: pin,
+            });
+
+            if (result.success && result.data) {
+                setShowSecurityModal(false);
+                setShowSuccessModal(true);
+            } else {
+                Alert.alert('Error', result.message || 'Payment confirmation failed');
+                setPin('');
+            }
+        } catch (error: any) {
+            console.error('Electricity confirm error:', error);
+            const errorMessage =
+                error?.response?.data?.message || error?.message || 'Payment confirmation failed. Please try again.';
+            Alert.alert('Error', errorMessage);
+            setPin('');
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // Check if beneficiary already exists
+    const beneficiaryExists = beneficiaries.some((b: any) => 
+        b.provider_id === selectedProviderId && 
+        b.account_number === meterNumber &&
+        b.category?.code === CATEGORY_CODE
+    );
+
+    // Handle save beneficiary
+    const handleSaveBeneficiary = async () => {
+        if (!selectedProviderId || !meterNumber) {
+            Alert.alert('Error', 'Missing provider or meter number');
+            return;
+        }
+
+        if (beneficiaryExists) {
+            Alert.alert('Info', 'This beneficiary already exists');
+            setShowSaveBeneficiaryModal(false);
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const result = await createBeneficiaryMutation.mutateAsync({
+                categoryCode: CATEGORY_CODE,
+                providerId: selectedProviderId,
+                accountNumber: meterNumber,
+                name: beneficiaryName || undefined,
+                accountType: selectedAccountType || undefined,
+            });
+
+            if (result.success) {
+                Alert.alert('Success', 'Beneficiary saved successfully');
+                setShowSaveBeneficiaryModal(false);
+                setBeneficiaryName('');
+            } else {
+                Alert.alert('Error', result.message || 'Failed to save beneficiary');
+            }
+        } catch (error: any) {
+            console.error('Save beneficiary error:', error);
+            Alert.alert(
+                'Error',
+                error?.response?.data?.message || error?.message || 'Failed to save beneficiary. Please try again.'
+            );
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // Handle delete beneficiary
+    const handleDeleteBeneficiary = async (beneficiaryId: number) => {
+        Alert.alert(
+            'Delete Beneficiary',
+            'Are you sure you want to delete this beneficiary?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setIsProcessing(true);
+                        try {
+                            const result = await deleteBeneficiaryMutation.mutateAsync(beneficiaryId);
+                            if (result.success) {
+                                Alert.alert('Success', 'Beneficiary deleted successfully');
+                            } else {
+                                Alert.alert('Error', result.message || 'Failed to delete beneficiary');
+                            }
+                        } catch (error: any) {
+                            console.error('Delete beneficiary error:', error);
+                            Alert.alert(
+                                'Error',
+                                error?.response?.data?.message || error?.message || 'Failed to delete beneficiary. Please try again.'
+                            );
+                        } finally {
+                            setIsProcessing(false);
+                        }
+                    },
+                },
+            ]
+        );
     };
 
     const handleSuccessTransaction = () => {
         setShowSuccessModal(false);
+        // Reset state
+        setAmount('');
+        setSelectedProviderId(null);
+        setSelectedProviderName(null);
+        setSelectedAccountType(null);
+        setMeterNumber('');
+        setAccountName(null);
+        setPin('');
+        setTransactionId(null);
+        setTransactionReference(null);
+        setFee(0);
+        setTotalAmount(0);
+        setBeneficiaryName('');
+
         navigation.navigate('TransactionHistory', {
             type: 'bill_payment',
             transactionData: {
                 type: 'Electricity Recharge',
-                billerType: selectedBiller,
+                billerType: selectedProviderName,
                 meterNumber: meterNumber,
-                accountType: selectedAccountType,
-                accountName: 'Qamardeen Abdulmalik',
+                accountType: selectedAccountType ? (selectedAccountType === 'prepaid' ? 'Prepaid' : 'Postpaid') : '',
+                accountName: accountName || '',
                 amount: amount,
-                fee: '200',
-                totalAmount: (parseFloat(amount.replace(/,/g, '')) + 200).toString(),
+                fee: fee.toString(),
+                totalAmount: totalAmount.toString(),
                 date: new Date().toLocaleString(),
                 status: 'Successful',
-                transactionId: '2348hf8283hfc92eni',
+                transactionId: transactionReference,
             },
         });
     };
@@ -102,18 +371,23 @@ const ElectricityScreen = () => {
         return num.toLocaleString('en-US');
     };
 
-    const filteredBillers = billers.filter(biller => {
-        if (billerSearchQuery && !biller.name.toLowerCase().includes(billerSearchQuery.toLowerCase())) return false;
+    const filteredBillers = providers.filter((biller: any) => {
+        if (billerSearchQuery && !biller.name?.toLowerCase().includes(billerSearchQuery.toLowerCase())) return false;
         return true;
     });
 
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView 
+            style={styles.container}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
             <StatusBar style="dark" />
 
             <ScrollView
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
             >
                 {/* Header */}
                 <View style={styles.header}>
@@ -138,9 +412,77 @@ const ElectricityScreen = () => {
                     <ThemedText style={styles.balanceLabel}>My Balance</ThemedText>
                     <View style={styles.balanceRow}>
                         <ThemedText style={styles.balanceCurrency}>₦</ThemedText>
-                        <ThemedText style={styles.balanceAmount}>10,000.00</ThemedText>
+                        {walletsLoading ? (
+                            <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                            <ThemedText style={styles.balanceAmount}>
+                                {balance.toLocaleString('en-US', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                })}
+                            </ThemedText>
+                        )}
                     </View>
                 </ImageBackground>
+
+                {/* Recent Section */}
+                <View style={styles.recentSection}>
+                    <View style={styles.recentSectionHeader}>
+                        <ThemedText style={styles.sectionTitle}>Recent</ThemedText>
+                        <TouchableOpacity
+                            onPress={() => setShowManageBeneficiariesModal(true)}
+                            activeOpacity={0.8}
+                        >
+                            <ThemedText style={styles.manageButtonText}>Manage</ThemedText>
+                        </TouchableOpacity>
+                    </View>
+                    {beneficiariesLoading ? (
+                        <View style={styles.loadingContainer}>
+                            <ActivityIndicator size="small" color="#42AC36" />
+                        </View>
+                    ) : beneficiaries.filter((b: any) => b.category?.code === CATEGORY_CODE).length > 0 ? (
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.recentScrollContent}
+                        >
+                            {beneficiaries
+                                .filter((b: any) => b.category?.code === CATEGORY_CODE)
+                                .slice(0, 5)
+                                .map((beneficiary: any) => {
+                                    const provider = providers.find((p: any) => p.id === beneficiary.provider_id);
+                                    return (
+                                        <TouchableOpacity
+                                            key={beneficiary.id}
+                                            style={styles.recentCard}
+                                            onPress={() => {
+                                                setMeterNumber(beneficiary.account_number || '');
+                                                setSelectedProviderId(beneficiary.provider_id);
+                                                setSelectedProviderName(provider?.name || beneficiary.provider?.name || '');
+                                                setSelectedAccountType(beneficiary.account_type as 'prepaid' | 'postpaid' | null);
+                                            }}
+                                            activeOpacity={0.8}
+                                        >
+                                            <View style={[styles.recentLogoContainer, { backgroundColor: '#FFD700' }]}>
+                                                <Ionicons name="flash" size={24} color="#FFA500" />
+                                            </View>
+                                            <ThemedText style={styles.recentPhoneNumber}>
+                                                {beneficiary.account_number || ''}
+                                            </ThemedText>
+                                            <ThemedText style={styles.recentNetworkName}>
+                                                {beneficiary.name || provider?.name || beneficiary.provider?.name || ''}
+                                            </ThemedText>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                        </ScrollView>
+                    ) : (
+                        <View style={styles.emptyBeneficiariesContainer}>
+                            <ThemedText style={styles.emptyBeneficiariesText}>No saved beneficiaries</ThemedText>
+                            <ThemedText style={styles.emptyBeneficiariesSubtext}>Save beneficiaries for faster payments</ThemedText>
+                        </View>
+                    )}
+                </View>
 
                 {/* Details Section */}
                 <View style={styles.detailsSection}>
@@ -152,8 +494,8 @@ const ElectricityScreen = () => {
                         onPress={() => setShowBillerModal(true)}
                         activeOpacity={0.8}
                     >
-                        <ThemedText style={[styles.input, !selectedBiller && styles.inputPlaceholder]}>
-                            {selectedBiller || 'Biller type'}
+                        <ThemedText style={[styles.input, !selectedProviderName && styles.inputPlaceholder]}>
+                            {selectedProviderName || 'Biller type'}
                         </ThemedText>
                         <Ionicons name="chevron-down" size={20} color="#9CA3AF" />
                     </TouchableOpacity>
@@ -165,7 +507,11 @@ const ElectricityScreen = () => {
                         activeOpacity={0.8}
                     >
                         <ThemedText style={[styles.input, !selectedAccountType && styles.inputPlaceholder]}>
-                            {selectedAccountType || 'Account type'}
+                            {selectedAccountType
+                                ? selectedAccountType === 'prepaid'
+                                    ? 'Prepaid'
+                                    : 'Postpaid'
+                                : 'Account type'}
                         </ThemedText>
                         <Ionicons name="chevron-down" size={20} color="#9CA3AF" />
                     </TouchableOpacity>
@@ -201,13 +547,18 @@ const ElectricityScreen = () => {
                 <TouchableOpacity
                     style={[
                         styles.proceedButton,
-                        (!selectedBiller || !selectedAccountType || !meterNumber || !amount) && styles.proceedButtonDisabled,
+                        (!selectedProviderId || !selectedAccountType || !meterNumber || !amount || isProcessing) &&
+                            styles.proceedButtonDisabled,
                     ]}
                     onPress={handleProceed}
-                    disabled={!selectedBiller || !selectedAccountType || !meterNumber || !amount}
+                    disabled={!selectedProviderId || !selectedAccountType || !meterNumber || !amount || isProcessing}
                     activeOpacity={0.8}
                 >
-                    <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    {isProcessing ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                    ) : (
+                        <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    )}
                 </TouchableOpacity>
             </View>
 
@@ -252,17 +603,26 @@ const ElectricityScreen = () => {
                             contentContainerStyle={styles.billersListContent}
                             nestedScrollEnabled={true}
                         >
-                            {filteredBillers.length > 0 ? (
-                                filteredBillers.map((biller) => (
+                            {providersLoading ? (
+                                <View style={styles.noBillersContainer}>
+                                    <ActivityIndicator size="small" color="#42AC36" />
+                                    <ThemedText style={styles.noBillersText}>Loading billers...</ThemedText>
+                                </View>
+                            ) : filteredBillers.length > 0 ? (
+                                filteredBillers.map((biller: any) => (
                                     <TouchableOpacity
                                         key={biller.id}
                                         style={styles.billerItem}
-                                        onPress={() => setSelectedBiller(biller.id)}
+                                        onPress={() => {
+                                            setSelectedProviderId(biller.id);
+                                            setSelectedProviderName(biller.name);
+                                            setAccountName(null);
+                                        }}
                                         activeOpacity={0.8}
                                     >
                                         <ThemedText style={styles.billerItemText}>{biller.name}</ThemedText>
                                         <View style={styles.radioButton}>
-                                            {selectedBiller === biller.id && <View style={styles.radioButtonInner} />}
+                                            {selectedProviderId === biller.id && <View style={styles.radioButtonInner} />}
                                         </View>
                                     </TouchableOpacity>
                                 ))
@@ -278,14 +638,14 @@ const ElectricityScreen = () => {
                             <TouchableOpacity
                                 style={[
                                     styles.applyButton,
-                                    !selectedBiller && styles.applyButtonDisabled,
+                                    !selectedProviderId && styles.applyButtonDisabled,
                                 ]}
                                 onPress={() => {
-                                    if (selectedBiller) {
+                                    if (selectedProviderId) {
                                         setShowBillerModal(false);
                                     }
                                 }}
-                                disabled={!selectedBiller}
+                                disabled={!selectedProviderId}
                                 activeOpacity={0.8}
                             >
                                 <ThemedText style={styles.applyButtonText}>Apply</ThemedText>
@@ -324,12 +684,16 @@ const ElectricityScreen = () => {
                                 <TouchableOpacity
                                     key={accountType.id}
                                     style={styles.accountTypeItem}
-                                    onPress={() => setSelectedAccountType(accountType.id)}
+                                    onPress={() =>
+                                        setSelectedAccountType(accountType.id as 'prepaid' | 'postpaid')
+                                    }
                                     activeOpacity={0.8}
                                 >
                                     <ThemedText style={styles.accountTypeItemText}>{accountType.name}</ThemedText>
                                     <View style={styles.radioButton}>
-                                        {selectedAccountType === accountType.id && <View style={styles.radioButtonInner} />}
+                                        {selectedAccountType === accountType.id && (
+                                            <View style={styles.radioButtonInner} />
+                                        )}
                                     </View>
                                 </TouchableOpacity>
                             ))}
@@ -390,7 +754,7 @@ const ElectricityScreen = () => {
                             </View>
                             <ThemedText style={styles.pendingText}>Pending</ThemedText>
                             <ThemedText style={styles.pendingDescription}>
-                                You are about to make a Electricity recharge of{' '}
+                                You are about to make an Electricity recharge of{' '}
                                 <ThemedText style={styles.pendingAmount}>N{formatAmount(amount)}</ThemedText>
                             </ThemedText>
                         </View>
@@ -403,17 +767,17 @@ const ElectricityScreen = () => {
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Fee:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>N200</ThemedText>
+                                <ThemedText style={styles.summaryValue}>N{formatAmount(fee.toString())}</ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Total Amount:</ThemedText>
                                 <ThemedText style={styles.summaryValue}>
-                                    N{formatAmount((parseFloat(amount.replace(/,/g, '')) + 200).toString())}
+                                    N{formatAmount(totalAmount.toString())}
                                 </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Biller Name:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{selectedBiller}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>{selectedProviderName}</ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Meter Number:</ThemedText>
@@ -421,22 +785,36 @@ const ElectricityScreen = () => {
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Account type:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{selectedAccountType}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>
+                                    {selectedAccountType
+                                        ? selectedAccountType === 'prepaid'
+                                            ? 'Prepaid'
+                                            : 'Postpaid'
+                                        : ''}
+                                </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Account name:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>Qamardeen Abdulmalik</ThemedText>
+                                <ThemedText style={styles.summaryValue}>{accountName || ''}</ThemedText>
                             </View>
                         </View>
 
                         {/* Action Buttons */}
                         <View style={styles.summaryButtons}>
                             <TouchableOpacity
-                                style={styles.proceedSummaryButton}
+                                style={[
+                                    styles.proceedSummaryButton,
+                                    isProcessing && styles.proceedSummaryButtonDisabled,
+                                ]}
                                 onPress={handleSummaryProceed}
+                                disabled={isProcessing}
                                 activeOpacity={0.8}
                             >
-                                <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                {isProcessing ? (
+                                    <ActivityIndicator color="#FFFFFF" size="small" />
+                                ) : (
+                                    <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                )}
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.cancelButton}
@@ -550,7 +928,7 @@ const ElectricityScreen = () => {
                                 <View style={styles.numpadRow}>
                                     <TouchableOpacity
                                         style={styles.numButton}
-                                        onPress={() => {}}
+                                        onPress={handleSecurityBiometric}
                                         activeOpacity={0.7}
                                     >
                                         <Ionicons name="finger-print" size={24} color="#42AC36" />
@@ -576,13 +954,17 @@ const ElectricityScreen = () => {
                                 <TouchableOpacity
                                     style={[
                                         styles.nextButton,
-                                        pin.length !== 4 && styles.nextButtonDisabled,
+                                        (pin.length !== 4 || isProcessing) && styles.nextButtonDisabled,
                                     ]}
                                     onPress={handleSecurityNext}
-                                    disabled={pin.length !== 4}
+                                    disabled={pin.length !== 4 || isProcessing}
                                     activeOpacity={0.8}
                                 >
-                                    <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                                    {isProcessing ? (
+                                        <ActivityIndicator color="#FFFFFF" size="small" />
+                                    ) : (
+                                        <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                                    )}
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -620,6 +1002,19 @@ const ElectricityScreen = () => {
                             You have successfully completed an Electricity recharge of{' '}
                             <ThemedText style={styles.successAmount}>N{formatAmount(amount)}</ThemedText>
                         </ThemedText>
+                        {!beneficiaryExists && selectedProviderId && meterNumber && (
+                            <TouchableOpacity
+                                style={styles.saveBeneficiaryButton}
+                                onPress={() => {
+                                    setShowSuccessModal(false);
+                                    setShowSaveBeneficiaryModal(true);
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="bookmark-outline" size={16} color="#42AC36" />
+                                <ThemedText style={styles.saveBeneficiaryButtonText}>Save as Beneficiary</ThemedText>
+                            </TouchableOpacity>
+                        )}
                         <View style={styles.successButtons}>
                             <TouchableOpacity
                                 style={styles.transactionButton}
@@ -639,7 +1034,166 @@ const ElectricityScreen = () => {
                     </Pressable>
                 </Pressable>
             </Modal>
-        </View>
+
+            {/* Save Beneficiary Modal */}
+            <Modal
+                visible={showSaveBeneficiaryModal}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setShowSaveBeneficiaryModal(false)}
+            >
+                <Pressable
+                    style={styles.beneficiaryModalOverlay}
+                    onPress={() => setShowSaveBeneficiaryModal(false)}
+                >
+                    <Pressable style={styles.beneficiaryModalContent} onPress={(e) => e.stopPropagation()}>
+                        <View style={styles.beneficiaryModalHeader}>
+                            <ThemedText style={styles.beneficiaryModalTitle}>Save as Beneficiary</ThemedText>
+                            <TouchableOpacity
+                                style={styles.beneficiaryModalCloseButton}
+                                onPress={() => {
+                                    setShowSaveBeneficiaryModal(false);
+                                    setBeneficiaryName('');
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="close" size={24} color="#000000" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.beneficiaryForm}>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Meter Number</ThemedText>
+                                <ThemedText style={styles.beneficiaryValue}>{meterNumber}</ThemedText>
+                            </View>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Biller</ThemedText>
+                                <ThemedText style={styles.beneficiaryValue}>{selectedProviderName}</ThemedText>
+                            </View>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Account Type</ThemedText>
+                                <ThemedText style={styles.beneficiaryValue}>
+                                    {selectedAccountType ? (selectedAccountType === 'prepaid' ? 'Prepaid' : 'Postpaid') : ''}
+                                </ThemedText>
+                            </View>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Name (Optional)</ThemedText>
+                                <TextInput
+                                    style={styles.beneficiaryNameInput}
+                                    placeholder="e.g., Home Meter, Office"
+                                    placeholderTextColor="#9CA3AF"
+                                    value={beneficiaryName}
+                                    onChangeText={setBeneficiaryName}
+                                />
+                            </View>
+                        </View>
+
+                        <View style={styles.beneficiaryModalButtons}>
+                            <TouchableOpacity
+                                style={[
+                                    styles.saveBeneficiaryConfirmButton,
+                                    isProcessing && styles.saveBeneficiaryConfirmButtonDisabled,
+                                ]}
+                                onPress={handleSaveBeneficiary}
+                                disabled={isProcessing}
+                                activeOpacity={0.8}
+                            >
+                                {isProcessing ? (
+                                    <ActivityIndicator color="#FFFFFF" size="small" />
+                                ) : (
+                                    <ThemedText style={styles.saveBeneficiaryConfirmButtonText}>Save</ThemedText>
+                                )}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.cancelBeneficiaryButton}
+                                onPress={() => {
+                                    setShowSaveBeneficiaryModal(false);
+                                    setBeneficiaryName('');
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <ThemedText style={styles.cancelBeneficiaryButtonText}>Cancel</ThemedText>
+                            </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* Manage Beneficiaries Modal */}
+            <Modal
+                visible={showManageBeneficiariesModal}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setShowManageBeneficiariesModal(false)}
+            >
+                <Pressable
+                    style={styles.beneficiaryModalOverlay}
+                    onPress={() => setShowManageBeneficiariesModal(false)}
+                >
+                    <Pressable style={styles.beneficiaryModalContent} onPress={(e) => e.stopPropagation()}>
+                        <View style={styles.beneficiaryModalHeader}>
+                            <ThemedText style={styles.beneficiaryModalTitle}>Manage Beneficiaries</ThemedText>
+                            <TouchableOpacity
+                                style={styles.beneficiaryModalCloseButton}
+                                onPress={() => setShowManageBeneficiariesModal(false)}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="close" size={24} color="#000000" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView
+                            style={styles.beneficiariesList}
+                            showsVerticalScrollIndicator={false}
+                            contentContainerStyle={styles.beneficiariesListContent}
+                        >
+                            {beneficiariesLoading ? (
+                                <View style={styles.beneficiariesLoadingContainer}>
+                                    <ActivityIndicator size="small" color="#42AC36" />
+                                    <ThemedText style={styles.beneficiariesLoadingText}>Loading...</ThemedText>
+                                </View>
+                            ) : beneficiaries.filter((b: any) => b.category?.code === CATEGORY_CODE).length > 0 ? (
+                                beneficiaries
+                                    .filter((b: any) => b.category?.code === CATEGORY_CODE)
+                                    .map((beneficiary: any) => {
+                                        const provider = providers.find((p: any) => p.id === beneficiary.provider_id);
+                                        return (
+                                            <View key={beneficiary.id} style={styles.beneficiaryListItem}>
+                                                <View style={styles.beneficiaryListItemContent}>
+                                                    <ThemedText style={styles.beneficiaryListItemName}>
+                                                        {beneficiary.name || 'Unnamed'}
+                                                    </ThemedText>
+                                                    <ThemedText style={styles.beneficiaryListItemNumber}>
+                                                        {beneficiary.account_number}
+                                                    </ThemedText>
+                                                    <ThemedText style={styles.beneficiaryListItemProvider}>
+                                                        {provider?.name || beneficiary.provider?.name || ''} • {beneficiary.account_type || 'N/A'}
+                                                    </ThemedText>
+                                                </View>
+                                                <TouchableOpacity
+                                                    style={styles.deleteBeneficiaryButton}
+                                                    onPress={() => handleDeleteBeneficiary(beneficiary.id)}
+                                                    disabled={isProcessing}
+                                                    activeOpacity={0.8}
+                                                >
+                                                    <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                                                </TouchableOpacity>
+                                            </View>
+                                        );
+                                    })
+                            ) : (
+                                <View style={styles.emptyBeneficiariesModalContainer}>
+                                    <ThemedText style={styles.emptyBeneficiariesModalText}>No beneficiaries saved</ThemedText>
+                                    <ThemedText style={styles.emptyBeneficiariesModalSubtext}>
+                                        Save beneficiaries after successful payments for faster checkout
+                                    </ThemedText>
+                                </View>
+                            )}
+                        </ScrollView>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+        </KeyboardAvoidingView>
     );
 };
 
@@ -650,7 +1204,7 @@ const styles = StyleSheet.create({
     },
     scrollContent: {
         paddingHorizontal: 20,
-        paddingBottom: 20,
+        paddingBottom: 100,
     },
     header: {
         paddingTop: 50,
@@ -703,7 +1257,7 @@ const styles = StyleSheet.create({
         marginRight: 8,
     },
     balanceAmount: {
-        fontSize: 50,
+        fontSize: 25,
         fontWeight: '700',
         color: '#FFFFFF',
     },
@@ -1165,45 +1719,45 @@ const styles = StyleSheet.create({
     },
     numpadLeft: {
         flex: 1,
-        maxWidth: 290,
+        maxWidth: 280,
         marginLeft: 10,
     },
     numpadRow: {
         flexDirection: 'row',
-        marginBottom: 10,
+        marginBottom: 8,
     },
     numButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
+        marginRight: 8,
     },
     numButtonText: {
-        fontSize: 30,
+        fontSize: 28,
         fontWeight: '400',
         color: '#000000',
     },
     backspaceButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
+        marginRight: 8,
     },
     numpadRight: {
-        width: 90,
-        marginLeft: 15,
+        width: 85,
+        marginLeft: 10,
         justifyContent: 'flex-start',
         alignItems: 'center',
     },
     nextButton: {
-        width: 90,
-        height: 200,
+        width: 85,
+        height: 150,
         backgroundColor: '#42AC36',
         borderRadius: 100,
         justifyContent: 'center',
@@ -1314,6 +1868,242 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '400',
         color: '#6B7280',
+    },
+    saveBeneficiaryButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#F0FDF4',
+        borderWidth: 1,
+        borderColor: '#42AC36',
+        borderRadius: 12,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        marginBottom: 16,
+        gap: 8,
+    },
+    saveBeneficiaryButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#42AC36',
+    },
+    recentSection: {
+        marginBottom: 24,
+    },
+    recentSectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    manageButtonText: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#42AC36',
+    },
+    recentScrollContent: {
+        gap: 12,
+    },
+    recentCard: {
+        width: 85,
+        backgroundColor: '#EFEFEF',
+        borderRadius: 15,
+        padding: 12,
+        alignItems: 'center',
+        marginRight: 12,
+    },
+    recentLogoContainer: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    recentPhoneNumber: {
+        fontSize: 8,
+        fontWeight: '400',
+        color: '#111827',
+        marginBottom: 4,
+    },
+    recentNetworkName: {
+        fontSize: 8,
+        fontWeight: '400',
+        color: '#6B7280',
+    },
+    emptyBeneficiariesContainer: {
+        padding: 20,
+        alignItems: 'center',
+    },
+    emptyBeneficiariesText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#6B7280',
+        marginBottom: 4,
+    },
+    emptyBeneficiariesSubtext: {
+        fontSize: 12,
+        color: '#9CA3AF',
+    },
+    beneficiaryModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'flex-end',
+    },
+    beneficiaryModalContent: {
+        backgroundColor: '#FFFFFF',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        paddingTop: 20,
+        paddingBottom: 32,
+        paddingHorizontal: 20,
+        maxHeight: height * 0.9,
+        width: '100%',
+    },
+    beneficiaryModalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 20,
+        position: 'relative',
+    },
+    beneficiaryModalTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#000000',
+        textAlign: 'center',
+    },
+    beneficiaryModalCloseButton: {
+        position: 'absolute',
+        right: 0,
+        top: 0,
+        bottom: 0,
+        justifyContent: 'center',
+    },
+    beneficiaryForm: {
+        marginBottom: 24,
+    },
+    beneficiaryInputContainer: {
+        marginBottom: 16,
+    },
+    beneficiaryLabel: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#6B7280',
+        marginBottom: 8,
+    },
+    beneficiaryValue: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#111827',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        padding: 12,
+    },
+    beneficiaryNameInput: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#111827',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    beneficiaryModalButtons: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    saveBeneficiaryConfirmButton: {
+        flex: 1,
+        backgroundColor: '#42AC36',
+        borderRadius: 12,
+        paddingVertical: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    saveBeneficiaryConfirmButtonDisabled: {
+        opacity: 0.6,
+    },
+    saveBeneficiaryConfirmButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#FFFFFF',
+    },
+    cancelBeneficiaryButton: {
+        flex: 1,
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        paddingVertical: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    cancelBeneficiaryButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#6B7280',
+    },
+    beneficiariesList: {
+        maxHeight: 400,
+    },
+    beneficiariesListContent: {
+        paddingBottom: 10,
+    },
+    beneficiariesLoadingContainer: {
+        padding: 40,
+        alignItems: 'center',
+        gap: 12,
+    },
+    beneficiariesLoadingText: {
+        fontSize: 14,
+        color: '#6B7280',
+    },
+    beneficiaryListItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 15,
+        padding: 16,
+        marginBottom: 12,
+    },
+    beneficiaryListItemContent: {
+        flex: 1,
+    },
+    beneficiaryListItemName: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#111827',
+        marginBottom: 4,
+    },
+    beneficiaryListItemNumber: {
+        fontSize: 12,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginBottom: 2,
+    },
+    beneficiaryListItemProvider: {
+        fontSize: 11,
+        fontWeight: '400',
+        color: '#9CA3AF',
+    },
+    deleteBeneficiaryButton: {
+        padding: 8,
+    },
+    emptyBeneficiariesModalContainer: {
+        padding: 40,
+        alignItems: 'center',
+    },
+    emptyBeneficiariesModalText: {
+        fontSize: 16,
+        fontWeight: '500',
+        color: '#6B7280',
+        marginBottom: 8,
+    },
+    emptyBeneficiariesModalSubtext: {
+        fontSize: 14,
+        color: '#9CA3AF',
+        textAlign: 'center',
     },
 });
 

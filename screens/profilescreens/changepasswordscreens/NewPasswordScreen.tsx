@@ -8,42 +8,99 @@ import {
     Dimensions,
     Platform,
     StatusBar as RNStatusBar,
+    KeyboardAvoidingView,
+    Alert,
+    ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../../components/ThemedText';
+import { useResetPassword } from '../../../mutations/authMutations';
 
 const { width } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type NewPasswordRouteProp = RouteProp<RootStackParamList, 'NewPassword'>;
 
 const NewPasswordScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
+    const route = useRoute<NewPasswordRouteProp>();
+    const email = route.params?.email || '';
+    const otp = route.params?.otp || '';
     const [newPassword, setNewPassword] = useState('');
     const [reenterPassword, setReenterPassword] = useState('');
     const [showNewPassword, setShowNewPassword] = useState(false);
     const [showReenterPassword, setShowReenterPassword] = useState(false);
+    const resetPasswordMutation = useResetPassword();
 
     const isFormValid = () => {
         return (
             newPassword.trim() !== '' &&
             reenterPassword.trim() !== '' &&
-            newPassword === reenterPassword
+            newPassword === reenterPassword &&
+            newPassword.length >= 6
         );
     };
 
-    const handleSave = () => {
-        if (isFormValid()) {
-            // Handle save logic here
-            navigation.navigate('Main');
+    const handleSave = async () => {
+        if (!newPassword.trim()) {
+            Alert.alert('Error', 'Please enter a password');
+            return;
+        }
+
+        if (newPassword.length < 6) {
+            Alert.alert('Validation Error', 'Password must be at least 6 characters long');
+            return;
+        }
+
+        if (newPassword !== reenterPassword) {
+            Alert.alert('Validation Error', 'Passwords do not match');
+            return;
+        }
+
+        if (!email || !otp) {
+            Alert.alert('Error', 'Missing email or OTP. Please start the reset process again.');
+            navigation.navigate('ResetPassword');
+            return;
+        }
+
+        try {
+            const result = await resetPasswordMutation.mutateAsync({
+                email: email,
+                otp: otp,
+                password: newPassword,
+                password_confirmation: reenterPassword,
+            });
+
+            if (result.success) {
+                Alert.alert('Success', 'Password changed successfully', [
+                    { text: 'OK', onPress: () => navigation.navigate('Main') }
+                ]);
+            } else {
+                Alert.alert('Reset Failed', result.message || 'Failed to reset password. Please try again.');
+            }
+        } catch (error: any) {
+            if (error?.data?.errors) {
+                const errorMessages = Object.values(error.data.errors).flat().join('\n');
+                Alert.alert('Reset Failed', errorMessages);
+            } else {
+                Alert.alert(
+                    'Reset Failed',
+                    error?.message || error?.data?.message || 'Failed to reset password. Please try again.'
+                );
+            }
         }
     };
 
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView
+            style={styles.container}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
             <StatusBar style="dark" />
             
             {/* Header */}
@@ -63,6 +120,7 @@ const NewPasswordScreen = () => {
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
             >
                 <View style={styles.contentSection}>
                     <ThemedText style={styles.mainTitle}>New Password</ThemedText>
@@ -77,6 +135,7 @@ const NewPasswordScreen = () => {
                             placeholder="New Password"
                             placeholderTextColor="#9CA3AF"
                             secureTextEntry={!showNewPassword}
+                            autoCapitalize="none"
                         />
                         <TouchableOpacity
                             style={styles.eyeIcon}
@@ -100,6 +159,7 @@ const NewPasswordScreen = () => {
                             placeholder="Reenter Password"
                             placeholderTextColor="#9CA3AF"
                             secureTextEntry={!showReenterPassword}
+                            autoCapitalize="none"
                         />
                         <TouchableOpacity
                             style={styles.eyeIcon}
@@ -121,23 +181,27 @@ const NewPasswordScreen = () => {
                 <TouchableOpacity
                     style={[
                         styles.saveButton,
-                        !isFormValid() && styles.saveButtonDisabled,
+                        (!isFormValid() || resetPasswordMutation.isPending) && styles.saveButtonDisabled,
                     ]}
                     activeOpacity={0.8}
                     onPress={handleSave}
-                    disabled={!isFormValid()}
+                    disabled={!isFormValid() || resetPasswordMutation.isPending}
                 >
-                    <ThemedText
-                        style={[
-                            styles.saveButtonText,
-                            !isFormValid() && styles.saveButtonTextDisabled,
-                        ]}
-                    >
-                        Save
-                    </ThemedText>
+                    {resetPasswordMutation.isPending ? (
+                        <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                        <ThemedText
+                            style={[
+                                styles.saveButtonText,
+                                (!isFormValid() || resetPasswordMutation.isPending) && styles.saveButtonTextDisabled,
+                            ]}
+                        >
+                            Save
+                        </ThemedText>
+                    )}
                 </TouchableOpacity>
             </View>
-        </View>
+        </KeyboardAvoidingView>
     );
 };
 

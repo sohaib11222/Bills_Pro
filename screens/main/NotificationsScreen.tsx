@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -6,6 +6,8 @@ import {
   ScrollView,
   TouchableOpacity,
   Dimensions,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,57 +15,99 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useNotifications } from '../../queries/notificationQueries';
+import { useMarkNotificationAsRead, useMarkAllNotificationsAsRead } from '../../mutations/notificationMutations';
 
 const { width, height } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 interface Notification {
-  id: string;
+  id: number;
+  type: string;
   title: string;
-  description: string;
-  date: string;
-  time: string;
-  hasImage?: boolean;
+  message: string;
+  read: boolean;
+  metadata?: any;
+  created_at: string;
+  updated_at: string;
 }
-
-const notifications: Notification[] = [
-  {
-    id: '1',
-    title: 'Get your virtual card',
-    description: 'Getting your virtual card on bills pro is very easy, apply now and get your card easily in seconds',
-    date: '09 Oct, 2025',
-    time: '07:22 AM',
-    hasImage: false,
-  },
-  {
-    id: '2',
-    title: 'Get your virtual card',
-    description: 'Getting your virtual card on bills pro is very easy, apply now and get your card easily in seconds',
-    date: '09 Oct, 2025',
-    time: '07:22 AM',
-    hasImage: true,
-  },
-  {
-    id: '3',
-    title: 'Get your virtual card',
-    description: 'Getting your virtual card on bills pro is very easy, apply now and get your card easily in seconds',
-    date: '09 Oct, 2025',
-    time: '07:22 AM',
-    hasImage: false,
-  },
-  {
-    id: '4',
-    title: 'Get your virtual card',
-    description: 'Getting your virtual card on bills pro is very easy, apply now and get your card easily in seconds',
-    date: '09 Oct, 2025',
-    time: '07:22 AM',
-    hasImage: false,
-  },
-];
 
 const NotificationsScreen = () => {
   const navigation = useNavigation<RootNavigationProp>();
+  const [page, setPage] = useState(1);
+  const perPage = 20;
+
+  const { data, isLoading, error, refetch, isRefetching } = useNotifications({
+    page,
+    per_page: perPage,
+  });
+
+  const markAsReadMutation = useMarkNotificationAsRead();
+  const markAllAsReadMutation = useMarkAllNotificationsAsRead();
+
+  const notifications: Notification[] = data?.data?.notifications || [];
+  const unreadCount = data?.data?.unread_count || 0;
+  const pagination = data?.data?.pagination;
+
+  const handleMarkAsRead = async (notificationId: number) => {
+    try {
+      await markAsReadMutation.mutateAsync(notificationId);
+    } catch (error) {
+      console.error('Failed to mark notification as read:', error);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      await markAllAsReadMutation.mutateAsync();
+    } catch (error) {
+      console.error('Failed to mark all notifications as read:', error);
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const options: Intl.DateTimeFormatOptions = {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    };
+    return date.toLocaleDateString('en-US', options);
+  };
+
+  const formatTime = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  };
+
+  if (isLoading && !data) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#42AC36" />
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 20 }]}>
+        <ThemedText style={{ color: '#EF4444', textAlign: 'center', marginBottom: 16 }}>
+          Error loading notifications. Please try again.
+        </ThemedText>
+        <TouchableOpacity
+          style={styles.retryButton}
+          onPress={() => refetch()}
+        >
+          <ThemedText style={{ color: '#42AC36' }}>Retry</ThemedText>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -79,7 +123,18 @@ const NotificationsScreen = () => {
           <Ionicons name="chevron-back" size={20} color="#000000" />
         </TouchableOpacity>
         <ThemedText style={styles.headerTitle}>Notifications</ThemedText>
-        <View style={styles.headerSpacer} />
+        <View style={styles.headerSpacer}>
+          {unreadCount > 0 && (
+            <TouchableOpacity
+              onPress={handleMarkAllAsRead}
+              disabled={markAllAsReadMutation.isPending}
+            >
+              <ThemedText style={styles.markAllText}>
+                {markAllAsReadMutation.isPending ? 'Marking...' : 'Mark all read'}
+              </ThemedText>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {/* Notifications List */}
@@ -87,48 +142,73 @@ const NotificationsScreen = () => {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={refetch}
+            tintColor="#42AC36"
+          />
+        }
       >
-        {notifications.map((notification) => (
-          <View key={notification.id} style={styles.notificationCard}>
-            {/* Left Icon */}
-            <View style={styles.iconContainer}>
-              <View style={styles.iconCircle}>
-                <Image
-                  source={require('../../assets/notification-01.png')}
-                  style={styles.bellIcon}
-                  resizeMode="contain"
-                />
-              </View>
-            </View>
-
-            {/* Content */}
-            <View style={styles.contentContainer}>
-              {/* Date and Time - Top Right */}
-              <View style={styles.dateTimeContainer}>
-                <ThemedText style={styles.dateTime}>
-                  {notification.date} - {notification.time}
-                </ThemedText>
-              </View>
-
-              {/* Title */}
-              <ThemedText style={styles.title}>{notification.title}</ThemedText>
-
-              {/* Description */}
-              <ThemedText style={styles.description}>{notification.description}</ThemedText>
-
-              {/* Image (only for second notification) */}
-              {notification.hasImage && (
-                <View style={styles.imageContainer}>
+        {notifications.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <ThemedText style={styles.emptyText}>No notifications</ThemedText>
+          </View>
+        ) : (
+          notifications.map((notification) => (
+            <TouchableOpacity
+              key={notification.id}
+              style={[
+                styles.notificationCard,
+                !notification.read && styles.unreadCard
+              ]}
+              activeOpacity={0.7}
+              onPress={() => !notification.read && handleMarkAsRead(notification.id)}
+            >
+              {/* Left Icon */}
+              <View style={styles.iconContainer}>
+                <View style={styles.iconCircle}>
                   <Image
-                    source={require('../../assets/Rectangle 42.png')}
-                    style={styles.notificationImage}
-                    resizeMode="cover"
+                    source={require('../../assets/notification-01.png')}
+                    style={styles.bellIcon}
+                    resizeMode="contain"
                   />
                 </View>
-              )}
-            </View>
-          </View>
-        ))}
+              </View>
+
+              {/* Content */}
+              <View style={styles.contentContainer}>
+                {/* Date and Time - Top Right */}
+                <View style={styles.dateTimeContainer}>
+                  <ThemedText style={styles.dateTime}>
+                    {formatDate(notification.created_at)} - {formatTime(notification.created_at)}
+                  </ThemedText>
+                </View>
+
+                {/* Title */}
+                <ThemedText style={styles.title}>{notification.title}</ThemedText>
+
+                {/* Description */}
+                <ThemedText style={styles.description}>{notification.message}</ThemedText>
+
+                {/* Unread indicator */}
+                {!notification.read && (
+                  <View style={styles.unreadIndicator} />
+                )}
+              </View>
+            </TouchableOpacity>
+          ))
+        )}
+
+        {/* Load More Button */}
+        {pagination && pagination.current_page < pagination.last_page && (
+          <TouchableOpacity
+            style={styles.loadMoreButton}
+            onPress={() => setPage(page + 1)}
+          >
+            <ThemedText style={styles.loadMoreText}>Load More</ThemedText>
+          </TouchableOpacity>
+        )}
       </ScrollView>
     </View>
   );
@@ -235,6 +315,49 @@ const styles = StyleSheet.create({
   notificationImage: {
     width: 151,
     height: 76,
+  },
+  unreadCard: {
+    backgroundColor: '#E8F5E9',
+    borderLeftWidth: 3,
+    borderLeftColor: '#42AC36',
+  },
+  unreadIndicator: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#42AC36',
+  },
+  emptyContainer: {
+    paddingVertical: 60,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#9CA3AF',
+  },
+  retryButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+  },
+  loadMoreButton: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  loadMoreText: {
+    fontSize: 14,
+    color: '#42AC36',
+    fontWeight: '500',
+  },
+  markAllText: {
+    fontSize: 12,
+    color: '#42AC36',
+    fontWeight: '500',
   },
 });
 

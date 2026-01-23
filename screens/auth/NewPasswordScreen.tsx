@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
@@ -8,35 +8,95 @@ import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompositeNavigationProp } from '@react-navigation/native';
 import ThemedText from '../../components/ThemedText';
+import { useResetPassword } from '../../mutations/authMutations';
 
 type AuthNavigationProp = NativeStackNavigationProp<AuthStackParamList>;
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type NavigationProp = CompositeNavigationProp<AuthNavigationProp, RootNavigationProp>;
+type NewPasswordRouteProp = RouteProp<AuthStackParamList, 'NewPassword'>;
 
 const { width, height } = Dimensions.get('window');
 
 const NewPasswordScreen = () => {
   const navigation = useNavigation<NavigationProp>();
+  const route = useRoute<NewPasswordRouteProp>();
+  const email = route.params?.email || '';
+  const otp = route.params?.otp || '';
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const resetPasswordMutation = useResetPassword();
 
-  const handleProceed = () => {
-    if (password && password === confirmPassword) {
-      const parent = navigation.getParent();
-      if (parent) {
-        parent.navigate('Auth');
+  const handleProceed = async () => {
+    if (!password.trim()) {
+      Alert.alert('Error', 'Please enter a password');
+      return;
+    }
+
+    if (password.length < 6) {
+      Alert.alert('Validation Error', 'Password must be at least 6 characters long');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      Alert.alert('Validation Error', 'Passwords do not match');
+      return;
+    }
+
+    if (!email || !otp) {
+      Alert.alert('Error', 'Missing email or OTP. Please start the reset process again.');
+      navigation.navigate('ResetPassword');
+      return;
+    }
+
+    try {
+      console.log('🔵 Reset Password - Request Data:', { email, otp, password: '***' });
+      const result = await resetPasswordMutation.mutateAsync({
+        email: email,
+        otp: otp,
+        password: password,
+        password_confirmation: confirmPassword,
+      });
+
+      console.log('🟢 Reset Password - API Response:', JSON.stringify(result, null, 2));
+
+      if (result.success) {
+        // Navigate to Login screen immediately
+        // Reset the navigation stack to Login
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Login' }],
+        });
+        
+        // Show success message after navigation completes
+        setTimeout(() => {
+          Alert.alert('Success', 'Password changed successfully. Please login with your new password.');
+        }, 500);
       } else {
-        navigation.navigate('Login');
+        Alert.alert('Reset Failed', result.message || 'Failed to reset password. Please try again.');
       }
-    } else {
-      alert('Passwords do not match');
+    } catch (error: any) {
+      console.log('❌ Reset Password - Error:', JSON.stringify(error, null, 2));
+      
+      if (error?.data?.errors) {
+        const errorMessages = Object.values(error.data.errors).flat().join('\n');
+        Alert.alert('Reset Failed', errorMessages);
+      } else {
+        Alert.alert(
+          'Reset Failed',
+          error?.message || error?.data?.message || 'Failed to reset password. Please try again.'
+        );
+      }
     }
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
       <StatusBar style="light" />
 
       {/* Background */}
@@ -54,67 +114,83 @@ const NewPasswordScreen = () => {
 
       {/* White Card */}
       <View style={styles.card}>
-        {/* Title */}
-        <ThemedText style={styles.title}>New Password</ThemedText>
+        <ScrollView
+          contentContainerStyle={styles.cardContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Title */}
+          <ThemedText style={styles.title}>New Password</ThemedText>
 
-        {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>Enter your new password</ThemedText>
+          {/* Subtitle */}
+          <ThemedText style={styles.subtitle}>Enter your new password</ThemedText>
 
-        {/* Form */}
-        <View style={styles.formContainer}>
-          {/* New Password */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={[styles.input, { flex: 1 }]}
-              placeholder="New Password"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!showPassword}
-              autoCapitalize="none"
-            />
-            <TouchableOpacity
-              style={styles.eyeIcon}
-              onPress={() => setShowPassword(!showPassword)}
-            >
-              <Ionicons
-                name={showPassword ? 'eye-off' : 'eye'}
-                size={20}
-                color="rgba(0, 0, 0, 0.5)"
+          {/* Form */}
+          <View style={styles.formContainer}>
+            {/* New Password */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="New Password"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
               />
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity
+                style={styles.eyeIcon}
+                onPress={() => setShowPassword(!showPassword)}
+              >
+                <Ionicons
+                  name={showPassword ? 'eye-off' : 'eye'}
+                  size={20}
+                  color="rgba(0, 0, 0, 0.5)"
+                />
+              </TouchableOpacity>
+            </View>
 
-          {/* Reenter Password */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={[styles.input, { flex: 1 }]}
-              placeholder="Reenter Password"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-              secureTextEntry={!showConfirmPassword}
-              autoCapitalize="none"
-            />
-            <TouchableOpacity
-              style={styles.eyeIcon}
-              onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-            >
-              <Ionicons
-                name={showConfirmPassword ? 'eye-off' : 'eye'}
-                size={20}
-                color="rgba(0, 0, 0, 0.5)"
+            {/* Reenter Password */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="Reenter Password"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry={!showConfirmPassword}
+                autoCapitalize="none"
               />
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.eyeIcon}
+                onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+              >
+                <Ionicons
+                  name={showConfirmPassword ? 'eye-off' : 'eye'}
+                  size={20}
+                  color="rgba(0, 0, 0, 0.5)"
+                />
+              </TouchableOpacity>
+            </View>
           </View>
+        </ScrollView>
+
+        {/* Proceed Button - Fixed at bottom */}
+        <View style={styles.buttonWrapper}>
+          <TouchableOpacity 
+            style={[styles.proceedButton, (!password.trim() || !confirmPassword.trim() || password !== confirmPassword || resetPasswordMutation.isPending) && styles.proceedButtonDisabled]}
+            onPress={handleProceed}
+            disabled={!password.trim() || !confirmPassword.trim() || password !== confirmPassword || resetPasswordMutation.isPending}
+          >
+            {resetPasswordMutation.isPending ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+            )}
+          </TouchableOpacity>
         </View>
-
-        {/* Proceed Button */}
-        <TouchableOpacity style={styles.proceedButton} onPress={handleProceed}>
-          <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
-        </TouchableOpacity>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -154,12 +230,19 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: height * 0.40,
+    maxHeight: height * 0.6,
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
-    paddingTop: 30,
     paddingHorizontal: 20,
+  },
+  cardContent: {
+    paddingTop: 30,
+    paddingBottom: 20,
+  },
+  buttonWrapper: {
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    paddingTop: 10,
   },
   title: {
     fontSize: 30,
@@ -198,10 +281,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   proceedButton: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
+    width: '100%',
     height: 60,
     borderRadius: 100,
     backgroundColor: '#42AC36',
@@ -213,6 +293,9 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  proceedButtonDisabled: {
+    opacity: 0.6,
   },
 });
 

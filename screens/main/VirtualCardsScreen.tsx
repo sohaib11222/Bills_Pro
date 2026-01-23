@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -9,6 +9,10 @@ import {
   Modal,
   TouchableOpacity,
   Pressable,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +20,17 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import {
+  useVirtualCards,
+  useVirtualCardDetails,
+  useVirtualCardBillingAddress,
+  useVirtualCardLimits,
+  useVirtualCardTransactions,
+} from '../../queries/virtualCardQueries';
+import {
+  useFreezeVirtualCard,
+  useUnfreezeVirtualCard,
+} from '../../mutations/virtualCardMutations';
 
 const { width } = Dimensions.get('window');
 
@@ -23,11 +38,223 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const VirtualCardsScreen = () => {
   const navigation = useNavigation<RootNavigationProp>();
+  const {
+    data: cardsData,
+    isLoading: isLoadingCards,
+    error: cardsError,
+    refetch: refetchCards,
+  } = useVirtualCards();
+
+  const cards = cardsData?.data || [];
+
+  const [selectedCardIndex, setSelectedCardIndex] = useState(0);
   const [cardDetailsVisible, setCardDetailsVisible] = useState(false);
   const [billingAddressVisible, setBillingAddressVisible] = useState(false);
   const [cardLimitVisible, setCardLimitVisible] = useState(false);
   const [freezeCardVisible, setFreezeCardVisible] = useState(false);
   const [freezeToggle, setFreezeToggle] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const flatListRef = useRef<FlatList>(null);
+
+  const selectedCard = cards[selectedCardIndex] || null;
+  const cardId = selectedCard?.id;
+
+  // Card color mapping
+  const getCardColor = (colorId?: string) => {
+    const colorMap: { [key: string]: string } = {
+      green: '#1B800F',
+      brown: '#8B4513',
+      purple: '#6B46C1',
+    };
+    return colorMap[colorId || 'green'] || '#1B800F';
+  };
+
+  const handleCardScroll = (event: any) => {
+    const contentOffsetX = event.nativeEvent.contentOffset.x;
+    const cardWidth = width - 100 + 12; // card width + margin
+    const index = Math.round(contentOffsetX / cardWidth);
+    if (index >= 0 && index < cards.length) {
+      setSelectedCardIndex(index);
+    }
+  };
+
+  const {
+    data: cardDetailsData,
+    isLoading: isLoadingDetails,
+    refetch: refetchCardDetails,
+  } = useVirtualCardDetails(cardId ?? 0);
+
+  const {
+    data: billingData,
+    isLoading: isLoadingBilling,
+    refetch: refetchBilling,
+  } = useVirtualCardBillingAddress(cardId ?? 0);
+
+  const {
+    data: limitsData,
+    isLoading: isLoadingLimits,
+    refetch: refetchLimits,
+  } = useVirtualCardLimits(cardId ?? 0);
+
+  const {
+    data: transactionsData,
+    isLoading: isLoadingTx,
+    refetch: refetchTransactions,
+  } = useVirtualCardTransactions(cardId ?? 0);
+
+  // Get recent transaction - handle different possible data structures
+  const recentTx = useMemo(() => {
+    if (!transactionsData?.data) {
+      console.log('🔵 VirtualCardsScreen - No transactionsData.data');
+      return null;
+    }
+    
+    // Handle array directly
+    if (Array.isArray(transactionsData.data)) {
+      console.log('🔵 VirtualCardsScreen - transactionsData.data is array, length:', transactionsData.data.length);
+      return transactionsData.data[0] || null;
+    }
+    
+    // Handle object with transactions array
+    if (transactionsData.data.transactions && Array.isArray(transactionsData.data.transactions)) {
+      console.log('🔵 VirtualCardsScreen - Found transactions array, length:', transactionsData.data.transactions.length);
+      return transactionsData.data.transactions[0] || null;
+    }
+    
+    // Handle object with data array
+    if (transactionsData.data.data && Array.isArray(transactionsData.data.data)) {
+      console.log('🔵 VirtualCardsScreen - Found data.data array, length:', transactionsData.data.data.length);
+      return transactionsData.data.data[0] || null;
+    }
+    
+    console.log('🔵 VirtualCardsScreen - Unknown data structure:', {
+      hasData: !!transactionsData.data,
+      dataType: typeof transactionsData.data,
+      isArray: Array.isArray(transactionsData.data),
+      keys: transactionsData.data ? Object.keys(transactionsData.data) : [],
+    });
+    
+    return null;
+  }, [transactionsData]);
+
+  // Format date for display
+  const formatDate = (dateString?: string): string => {
+    if (!dateString) return '';
+    try {
+      const date = new Date(dateString);
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = date.toLocaleString('en-US', { month: 'short' });
+      const year = date.getFullYear().toString().slice(-2);
+      const hours = date.getHours();
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const displayHours = hours % 12 || 12;
+      return `${day} ${month}, ${year} - ${displayHours}:${minutes} ${ampm}`;
+    } catch {
+      return dateString;
+    }
+  };
+
+  const freezeMutation = useFreezeVirtualCard();
+  const unfreezeMutation = useUnfreezeVirtualCard();
+
+  const isFrozen = selectedCard?.is_frozen ?? false;
+
+  useEffect(() => {
+    setFreezeToggle(isFrozen);
+  }, [isFrozen]);
+
+  const handleFreezeToggle = async () => {
+    if (!cardId) {
+      Alert.alert('No Card', 'Please create or select a card first.');
+      return;
+    }
+
+    try {
+      setFreezeToggle(prev => !prev);
+      if (isFrozen) {
+        await unfreezeMutation.mutateAsync(cardId);
+      } else {
+        await freezeMutation.mutateAsync(cardId);
+      }
+    } catch (error: any) {
+      setFreezeToggle(isFrozen);
+      Alert.alert(
+        'Error',
+        error?.response?.data?.message ||
+          error?.message ||
+          'Failed to update card status. Please try again.',
+      );
+    }
+  };
+
+  const requireCardAnd = (cb: () => void) => {
+    if (!cardId) {
+      Alert.alert('No Card', 'Please create a card first.');
+      return;
+    }
+    cb();
+  };
+
+  const handleNavigateFund = () => {
+    requireCardAnd(() => navigation.navigate('FundCard', { cardId }));
+  };
+
+  const handleNavigateWithdraw = () => {
+    requireCardAnd(() => navigation.navigate('WithdrawCard', { cardId }));
+  };
+
+  const handleNavigateTransactions = () => {
+    navigation.navigate('AllTransactions', { 
+      initialFilter: 'Virtual Cards',
+      wallet_type: 'virtual_card',
+    });
+  };
+
+  // Handle pull to refresh
+  const onRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      // Refetch all relevant queries
+      const promises = [refetchCards()];
+      
+      // Only refetch card-specific data if a card is selected
+      if (cardId) {
+        promises.push(
+          refetchCardDetails(),
+          refetchBilling(),
+          refetchLimits(),
+          refetchTransactions()
+        );
+      }
+      
+      await Promise.all(promises);
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  if (isLoadingCards) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <StatusBar style="dark" />
+        <ActivityIndicator size="large" color="#42AC36" />
+      </View>
+    );
+  }
+
+  if (cardsError) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <StatusBar style="dark" />
+        <ThemedText style={{ marginBottom: 8 }}>Unable to load virtual cards.</ThemedText>
+        <ThemedText>Please check your connection and try again.</ThemedText>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -35,6 +262,14 @@ const VirtualCardsScreen = () => {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            tintColor="#42AC36"
+            colors={['#42AC36']}
+          />
+        }
       >
         {/* Top content background (card + actions) */}
         <ImageBackground
@@ -44,47 +279,93 @@ const VirtualCardsScreen = () => {
         >
           {/* Card and Add Card Button Row */}
           <View style={styles.cardRowContainer}>
-            {/* Card */}
-            <ImageBackground
-              source={require('../../assets/card_background.png')}
-              style={styles.cardContainer}
-              imageStyle={styles.cardImage}
-              resizeMode="cover"
-            >
-              <View style={styles.cardTopRow}>
-                <ThemedText style={styles.cardSmallText}>Online Payment Virtual Card</ThemedText>
-                <ThemedText style={styles.cardBrandText}>Bills Pro</ThemedText>
-              </View>
+            {cards.length > 0 ? (
+              <FlatList
+                ref={flatListRef}
+                data={cards}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={handleCardScroll}
+                keyExtractor={(item, index) => `card-${item.id || index}`}
+                renderItem={({ item, index }) => (
+                  <View style={styles.cardWrapper}>
+                    <ImageBackground
+                      source={require('../../assets/card_background.png')}
+                      style={styles.cardContainer}
+                      imageStyle={styles.cardImage}
+                      resizeMode="cover"
+                    >
+                      {/* Color overlay based on card_color */}
+                      <View
+                        style={[
+                          StyleSheet.absoluteFill,
+                          {
+                            backgroundColor: getCardColor(item.card_color),
+                            opacity: 0.7,
+                            borderRadius: 24,
+                          },
+                        ]}
+                      />
+                      <View style={styles.cardContent}>
+                        <View style={styles.cardTopRow}>
+                          <ThemedText style={styles.cardSmallText}>Online Payment Virtual Card</ThemedText>
+                          <ThemedText style={styles.cardBrandText}>Bills Pro</ThemedText>
+                        </View>
 
-              <View style={styles.cardAmountRow}>
-                <View style={styles.cardAmountLeft}>
-                  <ThemedText style={styles.cardCurrency}>$</ThemedText>
-                  <ThemedText style={styles.cardAmount}>10,000.00</ThemedText>
-                </View>
-                <View style={styles.cardEyeCircle}>
-                  <Image
-                    source={require('../../assets/security-safe.png')}
-                    style={styles.eyeIcon}
-                    resizeMode="contain"
-                  />
-                </View>
-              </View>
+                        <View style={styles.cardAmountRow}>
+                          <View style={styles.cardAmountLeft}>
+                            <ThemedText style={styles.cardCurrency}>$</ThemedText>
+                            <ThemedText style={styles.cardAmount}>
+                              {Number(item.balance || 0).toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </ThemedText>
+                          </View>
+                          <View style={styles.cardEyeCircle}>
+                            <Image
+                              source={require('../../assets/security-safe.png')}
+                              style={styles.eyeIcon}
+                              resizeMode="contain"
+                            />
+                          </View>
+                        </View>
 
-              <View style={styles.cardNumberRow}>
-                <ThemedText style={styles.cardMaskedNumber}>**** **** **** 1234</ThemedText>
-              </View>
+                        <View style={styles.cardNumberRow}>
+                          <ThemedText style={styles.cardMaskedNumber}>
+                            {`**** **** **** ${String(item.card_number || '').slice(-4)}`}
+                          </ThemedText>
+                        </View>
 
-              <View style={styles.cardBottomRow}>
-                <View>
-                  <ThemedText style={styles.cardHolderName}>Qamardeen Abdul Malik</ThemedText>
-                </View>
-                <Image
-                  source={require('../../assets/Group 2.png')}
-                  style={styles.mastercardLogo}
-                  resizeMode="contain"
-                />
+                        <View style={styles.cardBottomRow}>
+                          <View>
+                            <ThemedText style={styles.cardHolderName}>
+                              {item.card_name || 'No card'}
+                            </ThemedText>
+                          </View>
+                          <Image
+                            source={require('../../assets/Group 2.png')}
+                            style={styles.mastercardLogo}
+                            resizeMode="contain"
+                          />
+                        </View>
+                      </View>
+                    </ImageBackground>
+                  </View>
+                )}
+                contentContainerStyle={styles.cardsListContent}
+                getItemLayout={(data, index) => ({
+                  length: width - 100 + 12,
+                  offset: (width - 100 + 12) * index,
+                  index,
+                })}
+              />
+            ) : (
+              <View style={styles.emptyCardContainer}>
+                <ThemedText style={styles.emptyCardText}>No cards yet</ThemedText>
               </View>
-            </ImageBackground>
+            )}
 
             {/* Add Card Button */}
             <TouchableOpacity
@@ -100,10 +381,25 @@ const VirtualCardsScreen = () => {
             </TouchableOpacity>
           </View>
 
-          {/* Pagination dot (center under the card) */}
-          <View style={styles.paginationDotWrapper}>
-            <View style={styles.paginationDot} />
-          </View>
+          {/* Pagination dots (center under the card) */}
+          {cards.length > 1 && (
+            <View style={styles.paginationDotWrapper}>
+              {cards.map((_, index) => (
+                <View
+                  key={index}
+                  style={[
+                    styles.paginationDot,
+                    index === selectedCardIndex && styles.paginationDotActive,
+                  ]}
+                />
+              ))}
+            </View>
+          )}
+          {cards.length <= 1 && (
+            <View style={styles.paginationDotWrapper}>
+              <View style={styles.paginationDot} />
+            </View>
+          )}
 
           {/* Buttons container background */}
           <ImageBackground
@@ -114,7 +410,7 @@ const VirtualCardsScreen = () => {
             <View style={styles.buttonsRow}>
               <TouchableOpacity
                 style={[styles.actionButton, {backgroundColor: '#42AC36'}]}
-                onPress={() => navigation.navigate('FundCard')}
+                onPress={handleNavigateFund}
                 activeOpacity={0.8}
               >
                 <Image
@@ -126,7 +422,7 @@ const VirtualCardsScreen = () => {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.actionButton, {backgroundColor: '#42AC36'}]}
-                onPress={() => navigation.navigate('WithdrawCard')}
+                onPress={handleNavigateWithdraw}
                 activeOpacity={0.8}
               >
                 <Image
@@ -136,9 +432,13 @@ const VirtualCardsScreen = () => {
                 />
                 <ThemedText style={styles.actionButtonText}>Withdraw</ThemedText>
               </TouchableOpacity>
-              <View style={[styles.actionButton, {backgroundColor: '#1B800F'}]}>
+              <TouchableOpacity
+                style={[styles.actionButton, {backgroundColor: '#1B800F'}]}
+                onPress={handleNavigateTransactions}
+                activeOpacity={0.8}
+              >
                 <ThemedText style={styles.actionButtonText}>Transaction</ThemedText>
-              </View>
+              </TouchableOpacity>
             </View>
             {/* Small green bar indicator */}
             <View style={styles.greenBarContainer}>
@@ -234,30 +534,75 @@ const VirtualCardsScreen = () => {
           </View>
 
           {/* Recent Transactions */}
-          <View style={styles.recentHeaderRow}>
-            <ThemedText style={styles.recentTitle}>Recent Transactions</ThemedText>
-            <ThemedText style={styles.recentViewAll}>View All</ThemedText>
-          </View>
+          {cardId && (
+            <View style={styles.recentTransactionsSection}>
+              <View style={styles.recentHeaderRow}>
+                <ThemedText style={styles.recentTitle}>Recent Transactions</ThemedText>
+                <TouchableOpacity
+                  onPress={handleNavigateTransactions}
+                  activeOpacity={0.8}
+                >
+                  <ThemedText style={styles.recentViewAll}>View All</ThemedText>
+                </TouchableOpacity>
+              </View>
 
-          <View style={styles.transactionCard}>
-            <View style={styles.transactionLeft}>
-              <View style={styles.transactionIconCircle}>
-                <Image
-                  source={require('../../assets/sent (1).png')}
-                  style={styles.transactionIconImage}
-                  resizeMode="contain"
-                />
-              </View>
-              <View>
-                <ThemedText style={styles.transactionTitle}>Funds Deposit</ThemedText>
-                <ThemedText style={styles.transactionStatus}>Successful</ThemedText>
-              </View>
+              {isLoadingTx ? (
+                <View style={[styles.transactionCard, { justifyContent: 'center', paddingVertical: 20 }]}>
+                  <ActivityIndicator size="small" color="#42AC36" />
+                </View>
+              ) : recentTx ? (
+                <TouchableOpacity
+                  style={styles.transactionCard}
+                  onPress={() => {
+                    navigation.navigate('TransactionHistory', {
+                      type: 'virtual_card',
+                      transactionData: {
+                        ...recentTx,
+                        transaction_id: recentTx.transaction_id || recentTx.id,
+                        wallet_type: 'virtual_card',
+                      },
+                      cardId: cardId,
+                    });
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.transactionLeft}>
+                    <View style={styles.transactionIconCircle}>
+                      <Image
+                        source={require('../../assets/sent (1).png')}
+                        style={styles.transactionIconImage}
+                        resizeMode="contain"
+                      />
+                    </View>
+                    <View>
+                      <ThemedText style={styles.transactionTitle}>
+                        {recentTx.description || recentTx.type || 'Transaction'}
+                      </ThemedText>
+                      <ThemedText style={styles.transactionStatus}>
+                        {recentTx.status === 'completed'
+                          ? 'Successful'
+                          : recentTx.status || 'Pending'}
+                      </ThemedText>
+                    </View>
+                  </View>
+                  <View style={styles.transactionRight}>
+                    <ThemedText style={styles.transactionAmount}>
+                      {recentTx.currency || 'USD'} {Number(recentTx.amount || 0).toLocaleString()}
+                    </ThemedText>
+                    <ThemedText style={styles.transactionDate}>
+                      {formatDate(recentTx.created_at)}
+                    </ThemedText>
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={[styles.transactionCard, { justifyContent: 'center', paddingVertical: 20 }]}>
+                  <ThemedText style={[styles.transactionTitle, { textAlign: 'center', opacity: 0.5 }]}>
+                    No transactions yet
+                  </ThemedText>
+                </View>
+              )}
             </View>
-            <View style={styles.transactionRight}>
-              <ThemedText style={styles.transactionAmount}>20,000</ThemedText>
-              <ThemedText style={styles.transactionDate}>06 Oct, 25 - 08:00 PM</ThemedText>
-            </View>
-          </View>
+          )}
         </View>
       </ScrollView>
 
@@ -283,88 +628,140 @@ const VirtualCardsScreen = () => {
               </TouchableOpacity>
             </View>
 
-            {/* Card Display */}
-            <ImageBackground
-              source={require('../../assets/card_background.png')}
-              style={styles.modalCardContainer}
-              imageStyle={styles.modalCardImage}
-              resizeMode="cover"
-            >
-              <View style={styles.modalCardTopRow}>
-                <ThemedText style={styles.modalCardSmallText}>Online Payment Virtual Card</ThemedText>
-                <ThemedText style={styles.modalCardBrandText}>Bills Pro</ThemedText>
+            {isLoadingDetails && (
+              <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color="#42AC36" />
               </View>
+            )}
 
-              <View style={styles.modalCardAmountRow}>
-                <View style={styles.modalCardAmountLeft}>
-                  <ThemedText style={styles.modalCardCurrency}>$</ThemedText>
-                  <ThemedText style={styles.modalCardAmount}>10,000.00</ThemedText>
-                </View>
-                <View style={styles.modalCardEyeCircle}>
-                  <Image
-                    source={require('../../assets/security-safe.png')}
-                    style={styles.modalEyeIcon}
-                    resizeMode="contain"
-                  />
-                </View>
-              </View>
+            {(() => {
+              const details: any = cardDetailsData?.data || selectedCard;
 
-              <View style={styles.modalCardNumberRow}>
-                <ThemedText style={styles.modalCardMaskedNumber}>**** **** **** 1234</ThemedText>
-              </View>
+              return (
+                <>
+                  {/* Card Display */}
+                  <ImageBackground
+                    source={require('../../assets/card_background.png')}
+                    style={styles.modalCardContainer}
+                    imageStyle={styles.modalCardImage}
+                    resizeMode="cover"
+                  >
+                    {/* Color overlay */}
+                    <View
+                      style={[
+                        StyleSheet.absoluteFill,
+                        {
+                          backgroundColor: getCardColor(details?.card_color),
+                          opacity: 0.7,
+                          borderRadius: 24,
+                        },
+                      ]}
+                    />
+                    <View style={styles.modalCardContent}>
+                      <View style={styles.modalCardTopRow}>
+                        <ThemedText style={styles.modalCardSmallText}>
+                          Online Payment Virtual Card
+                        </ThemedText>
+                        <ThemedText style={styles.modalCardBrandText}>Bills Pro</ThemedText>
+                      </View>
 
-              <View style={styles.modalCardBottomRow}>
-                <ThemedText style={styles.modalCardHolderName}>Qamardeen Abdul Malik</ThemedText>
-                <Image
-                  source={require('../../assets/Group 2.png')}
-                  style={styles.modalMastercardLogo}
-                  resizeMode="contain"
-                />
-              </View>
-            </ImageBackground>
+                      <View style={styles.modalCardAmountRow}>
+                        <View style={styles.modalCardAmountLeft}>
+                          <ThemedText style={styles.modalCardCurrency}>$</ThemedText>
+                          <ThemedText style={styles.modalCardAmount}>
+                            {details
+                              ? Number(details.balance || 0).toLocaleString(undefined, {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })
+                              : '0.00'}
+                          </ThemedText>
+                        </View>
+                        <View style={styles.modalCardEyeCircle}>
+                          <Image
+                            source={require('../../assets/security-safe.png')}
+                            style={styles.modalEyeIcon}
+                            resizeMode="contain"
+                          />
+                        </View>
+                      </View>
 
-            {/* Card Details List */}
-            <View style={styles.cardDetailsList}>
-              <View style={styles.detailRow}>
-                <ThemedText style={styles.detailLabel}>Card Name</ThemedText>
-                <View style={styles.detailValueRow}>
-                  <ThemedText style={styles.detailValue}>Qamardeen Abdulmalik</ThemedText>
-                  <TouchableOpacity>
-                    <Ionicons name="copy-outline" size={18} color="#6B7280" />
-                  </TouchableOpacity>
-                </View>
-              </View>
+                      <View style={styles.modalCardNumberRow}>
+                        <ThemedText style={styles.modalCardMaskedNumber}>
+                          {details
+                            ? `**** **** **** ${String(details.card_number).slice(-4)}`
+                            : '**** **** **** ----'}
+                        </ThemedText>
+                      </View>
 
-              <View style={styles.detailRow}>
-                <ThemedText style={styles.detailLabel}>Card Number</ThemedText>
-                <View style={styles.detailValueRow}>
-                  <ThemedText style={styles.detailValue}>1234 4567 1234 5678</ThemedText>
-                  <TouchableOpacity>
-                    <Ionicons name="copy-outline" size={18} color="#6B7280" />
-                  </TouchableOpacity>
-                </View>
-              </View>
+                      <View style={styles.modalCardBottomRow}>
+                        <ThemedText style={styles.modalCardHolderName}>
+                          {details?.card_name || '---'}
+                        </ThemedText>
+                        <Image
+                          source={require('../../assets/Group 2.png')}
+                          style={styles.modalMastercardLogo}
+                          resizeMode="contain"
+                        />
+                      </View>
+                    </View>
+                  </ImageBackground>
 
-              <View style={styles.detailRow}>
-                <ThemedText style={styles.detailLabel}>CVV</ThemedText>
-                <View style={styles.detailValueRow}>
-                  <ThemedText style={styles.detailValue}>123</ThemedText>
-                  <TouchableOpacity>
-                    <Ionicons name="copy-outline" size={18} color="#6B7280" />
-                  </TouchableOpacity>
-                </View>
-              </View>
+                  {/* Card Details List */}
+                  <View style={styles.cardDetailsList}>
+                    <View style={styles.detailRow}>
+                      <ThemedText style={styles.detailLabel}>Card Name</ThemedText>
+                      <View style={styles.detailValueRow}>
+                        <ThemedText style={styles.detailValue}>
+                          {details?.card_name || '---'}
+                        </ThemedText>
+                        <TouchableOpacity>
+                          <Ionicons name="copy-outline" size={18} color="#6B7280" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
 
-              <View style={styles.detailRow}>
-                <ThemedText style={styles.detailLabel}>Expiry Date</ThemedText>
-                <View style={styles.detailValueRow}>
-                  <ThemedText style={styles.detailValue}>01/29</ThemedText>
-                  <TouchableOpacity>
-                    <Ionicons name="copy-outline" size={18} color="#6B7280" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
+                    <View style={styles.detailRow}>
+                      <ThemedText style={styles.detailLabel}>Card Number</ThemedText>
+                      <View style={styles.detailValueRow}>
+                        <ThemedText style={styles.detailValue}>
+                          {details?.card_number || '---- ---- ---- ----'}
+                        </ThemedText>
+                        <TouchableOpacity>
+                          <Ionicons name="copy-outline" size={18} color="#6B7280" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+
+                    <View style={styles.detailRow}>
+                      <ThemedText style={styles.detailLabel}>CVV</ThemedText>
+                      <View style={styles.detailValueRow}>
+                        <ThemedText style={styles.detailValue}>
+                          {details?.cvv || '---'}
+                        </ThemedText>
+                        <TouchableOpacity>
+                          <Ionicons name="copy-outline" size={18} color="#6B7280" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+
+                    <View style={styles.detailRow}>
+                      <ThemedText style={styles.detailLabel}>Expiry Date</ThemedText>
+                      <View style={styles.detailValueRow}>
+                        <ThemedText style={styles.detailValue}>
+                          {details
+                            ? `${details.expiry_month}/${details.expiry_year}`
+                            : '--/----'}
+                        </ThemedText>
+                        <TouchableOpacity>
+                          <Ionicons name="copy-outline" size={18} color="#6B7280" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                </>
+              );
+            })()}
           </Pressable>
         </Pressable>
       </Modal>
@@ -395,7 +792,9 @@ const VirtualCardsScreen = () => {
               <View style={styles.billingField}>
                 <ThemedText style={styles.billingLabel}>Street Name</ThemedText>
                 <View style={styles.billingValueContainer}>
-                  <ThemedText style={styles.billingValue}>No 580 california street</ThemedText>
+                  <ThemedText style={styles.billingValue}>
+                    {billingData?.data?.street || '---'}
+                  </ThemedText>
                   <TouchableOpacity>
                     <Ionicons name="copy-outline" size={18} color="#6B7280" />
                   </TouchableOpacity>
@@ -405,7 +804,9 @@ const VirtualCardsScreen = () => {
               <View style={styles.billingField}>
                 <ThemedText style={styles.billingLabel}>City Name</ThemedText>
                 <View style={styles.billingValueContainer}>
-                  <ThemedText style={styles.billingValue}>San Francisco</ThemedText>
+                  <ThemedText style={styles.billingValue}>
+                    {billingData?.data?.city || '---'}
+                  </ThemedText>
                   <TouchableOpacity>
                     <Ionicons name="copy-outline" size={18} color="#6B7280" />
                   </TouchableOpacity>
@@ -415,7 +816,9 @@ const VirtualCardsScreen = () => {
               <View style={styles.billingField}>
                 <ThemedText style={styles.billingLabel}>State Name</ThemedText>
                 <View style={styles.billingValueContainer}>
-                  <ThemedText style={styles.billingValue}>California</ThemedText>
+                  <ThemedText style={styles.billingValue}>
+                    {billingData?.data?.state || '---'}
+                  </ThemedText>
                   <TouchableOpacity>
                     <Ionicons name="copy-outline" size={18} color="#6B7280" />
                   </TouchableOpacity>
@@ -425,7 +828,9 @@ const VirtualCardsScreen = () => {
               <View style={styles.billingField}>
                 <ThemedText style={styles.billingLabel}>Country Name</ThemedText>
                 <View style={styles.billingValueContainer}>
-                  <ThemedText style={styles.billingValue}>United States</ThemedText>
+                  <ThemedText style={styles.billingValue}>
+                    {billingData?.data?.country || '---'}
+                  </ThemedText>
                   <TouchableOpacity>
                     <Ionicons name="copy-outline" size={18} color="#6B7280" />
                   </TouchableOpacity>
@@ -435,7 +840,9 @@ const VirtualCardsScreen = () => {
               <View style={styles.billingField}>
                 <ThemedText style={styles.billingLabel}>Postal Code</ThemedText>
                 <View style={styles.billingValueContainer}>
-                  <ThemedText style={styles.billingValue}>123445</ThemedText>
+                  <ThemedText style={styles.billingValue}>
+                    {billingData?.data?.postal_code || '---'}
+                  </ThemedText>
                   <TouchableOpacity>
                     <Ionicons name="copy-outline" size={18} color="#6B7280" />
                   </TouchableOpacity>
@@ -476,11 +883,15 @@ const VirtualCardsScreen = () => {
               <View style={styles.limitContent}>
                 <View style={styles.limitRow}>
                   <ThemedText style={styles.limitLabel}>Spending Limit</ThemedText>
-                  <ThemedText style={styles.limitValue}>$2,000</ThemedText>
+                  <ThemedText style={styles.limitValue}>
+                    ${limitsData?.data?.daily?.spending_limit ?? 0}
+                  </ThemedText>
                 </View>
                 <View style={[styles.limitRow, styles.limitRowLast]}>
                   <ThemedText style={styles.limitLabel}>Card Transactions</ThemedText>
-                  <ThemedText style={styles.limitValue}>5</ThemedText>
+                  <ThemedText style={styles.limitValue}>
+                    {limitsData?.data?.daily?.transaction_limit ?? 0}
+                  </ThemedText>
                 </View>
               </View>
             </View>
@@ -493,11 +904,15 @@ const VirtualCardsScreen = () => {
               <View style={styles.limitContent}>
                 <View style={styles.limitRow}>
                   <ThemedText style={styles.limitLabel}>Spending Limit</ThemedText>
-                  <ThemedText style={styles.limitValue}>$20,000</ThemedText>
+                  <ThemedText style={styles.limitValue}>
+                    ${limitsData?.data?.monthly?.spending_limit ?? 0}
+                  </ThemedText>
                 </View>
                 <View style={[styles.limitRow, styles.limitRowLast]}>
                   <ThemedText style={styles.limitLabel}>Card Transactions</ThemedText>
-                  <ThemedText style={styles.limitValue}>50</ThemedText>
+                  <ThemedText style={styles.limitValue}>
+                    {limitsData?.data?.monthly?.transaction_limit ?? 0}
+                  </ThemedText>
                 </View>
               </View>
             </View>
@@ -549,7 +964,7 @@ const VirtualCardsScreen = () => {
                   <ThemedText style={styles.freezeToggleText}>Freeze your card to protect it</ThemedText>
                   <TouchableOpacity
                     style={[styles.toggleSwitch, freezeToggle && styles.toggleSwitchActive]}
-                    onPress={() => setFreezeToggle(!freezeToggle)}
+                    onPress={handleFreezeToggle}
                   >
                     <View style={[styles.toggleCircle, freezeToggle && styles.toggleCircleActive]} />
                   </TouchableOpacity>
@@ -569,7 +984,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   scrollContent: {
-    paddingBottom: 24,
+    paddingBottom: 150,
   },
   topBackground: {
     width,
@@ -584,17 +999,39 @@ const styles = StyleSheet.create({
     width: width - 40,
     paddingHorizontal: 0,
   },
+  cardsListContent: {
+    paddingRight: 12,
+  },
+  cardWrapper: {
+    marginRight: 12,
+  },
   cardContainer: {
     width: width - 100,
     height: 190,
     borderRadius: 24,
-    paddingHorizontal: 20,
-    paddingVertical: 18,
     overflow: 'hidden',
-    marginRight: 12,
   },
   cardImage: {
     borderRadius: 24,
+  },
+  cardContent: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    zIndex: 1,
+  },
+  emptyCardContainer: {
+    width: width - 100,
+    height: 190,
+    borderRadius: 24,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  emptyCardText: {
+    fontSize: 14,
+    color: '#6B7280',
   },
   cardTopRow: {
     flexDirection: 'row',
@@ -688,12 +1125,18 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
   },
   paginationDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
+    backgroundColor: '#D1D5DB',
+  },
+  paginationDotActive: {
     backgroundColor: '#3B7F3F',
+    width: 20,
   },
   buttonsBackground: {
     width: width - 25,
@@ -745,7 +1188,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
     paddingTop: 24,
-    paddingBottom: 32,
+    paddingBottom: 50,
   },
   gridRow: {
     flexDirection: 'row',
@@ -823,6 +1266,9 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 12,
   },
+  recentTransactionsSection: {
+    marginBottom: 20,
+  },
   recentTitle: {
     fontSize: 14,
     fontWeight: '600',
@@ -860,7 +1306,7 @@ const styles = StyleSheet.create({
     tintColor: '#1B800F',
   },
   transactionTitle: {
-    fontSize: 14,
+    fontSize: 10,
     fontWeight: '500',
     color: '#111827',
   },
@@ -873,7 +1319,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   transactionAmount: {
-    fontSize: 14,
+    fontSize: 11,
     fontWeight: '600',
     color: '#16A34A',
   },
@@ -922,14 +1368,18 @@ const styles = StyleSheet.create({
     width: width - 40,
     height: 190,
     borderRadius: 24,
-    paddingHorizontal: 20,
-    paddingVertical: 18,
     overflow: 'hidden',
     alignSelf: 'center',
     marginBottom: 20,
   },
   modalCardImage: {
     borderRadius: 24,
+  },
+  modalCardContent: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    zIndex: 1,
   },
   modalCardTopRow: {
     flexDirection: 'row',

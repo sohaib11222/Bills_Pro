@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo } from 'react';
 import {
     View,
     StyleSheet,
@@ -6,6 +6,8 @@ import {
     ScrollView,
     TouchableOpacity,
     Dimensions,
+    ActivityIndicator,
+    RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,57 +15,144 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useCryptoAccountDetails } from '../../queries/cryptoQueries';
 
 const { width, height } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type CryptoWalletRouteProp = RouteProp<RootStackParamList, 'CryptoWallet'>;
 
+// Helper function to get crypto icon
+const getCryptoIcon = (currency: string) => {
+    const icons: Record<string, any> = {
+        'BTC': require('../../assets/popular1.png'),
+        'ETH': require('../../assets/popular2.png'),
+        'USDT': require('../../assets/popular3.png'),
+        'USDC': require('../../assets/popular4.png'),
+    };
+    return icons[currency] || require('../../assets/popular1.png');
+};
+
+// Helper function to get crypto color
+const getCryptoColor = (currency: string) => {
+    const colors: Record<string, string> = {
+        'BTC': '#FFA5004D',
+        'ETH': '#0000FF4D',
+        'USDT': '#0080004D',
+        'USDC': '#0000FF4D',
+    };
+    return colors[currency] || '#42AC36';
+};
+
+// Helper function to format transaction type
+const formatTransactionType = (type: string, currency: string): string => {
+    const typeMap: Record<string, string> = {
+        'crypto_buy': `Buy ${currency}`,
+        'crypto_sell': `Sell ${currency}`,
+        'crypto_withdrawal': `Send ${currency}`,
+        'crypto_deposit': `Receive ${currency}`,
+    };
+    return typeMap[type] || type;
+};
+
+// Helper function to format transaction status
+const formatTransactionStatus = (status: string): string => {
+    const statusMap: Record<string, string> = {
+        'completed': 'Successful',
+        'pending': 'Pending',
+        'failed': 'Failed',
+        'processing': 'Processing',
+    };
+    return statusMap[status?.toLowerCase()] || status || 'Pending';
+};
+
+// Helper function to determine if transaction is deposit/receive
+const isDepositTransaction = (type: string): boolean => {
+    return type === 'crypto_deposit' || type === 'crypto_buy';
+};
+
 const CryptoWalletScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const route = useRoute<CryptoWalletRouteProp>();
-    const { cryptoType, balance, usdValue, icon, iconBackground } = route.params || {
-        cryptoType: 'BTC',
-        balance: '0.00023',
-        usdValue: '$20,000',
-        icon: require('../../assets/popular1.png'),
-        iconBackground: '#FFA5004D',
+    
+    // Get currency and blockchain from route params (new way)
+    // Fallback to cryptoType for backward compatibility
+    const currency = route.params?.currency || route.params?.cryptoType || 'BTC';
+    const blockchain = route.params?.blockchain;
+    
+    // Fetch account details and transactions
+    const { 
+        data: accountData, 
+        isLoading, 
+        error, 
+        refetch,
+        isRefetching 
+    } = useCryptoAccountDetails(currency, blockchain || undefined);
+    
+    // Extract account info and transactions
+    const account = accountData?.data;
+    const transactions = account?.transactions || [];
+    
+    // Use API data if available, otherwise fallback to route params
+    const cryptoType = currency;
+    const balance = account?.balance?.toString() || route.params?.balance || '0.00';
+    const usdValue = account?.usd_value 
+        ? `$${account.usd_value.toFixed(2)}` 
+        : route.params?.usdValue || '$0.00';
+    const icon = route.params?.icon || getCryptoIcon(currency);
+    const iconBackground = route.params?.iconBackground || getCryptoColor(currency);
+    
+    // Format transactions for display
+    const formattedTransactions = useMemo(() => {
+        return transactions.map((transaction: {
+            id?: number | string;
+            transaction_id?: string;
+            type: string;
+            status: string;
+            amount: number;
+            created_at?: string;
+            blockchain?: string;
+            [key: string]: any;
+        }) => {
+            const isDeposit = isDepositTransaction(transaction.type);
+            const transactionDate = transaction.created_at 
+                ? new Date(transaction.created_at).toLocaleDateString('en-NG', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                })
+                : '';
+            
+            return {
+                id: transaction.id || transaction.transaction_id,
+                transaction_id: transaction.transaction_id,
+                type: formatTransactionType(transaction.type, currency),
+                status: formatTransactionStatus(transaction.status),
+                amount: transaction.amount?.toFixed(4) || '0.0000',
+                date: transactionDate,
+                isDeposit,
+                ...transaction, // Include all original transaction data
+            };
+        });
+    }, [transactions, currency]);
+    
+    // Handle refresh
+    const onRefresh = () => {
+        refetch();
     };
 
-    const recentTransactions = [
-        {
-            id: '1',
-            type: 'Crypto Deposit - BTC',
-            status: 'Successful',
-            amount: '20,000',
-            date: '06 Oct, 25 - 08:00 PM',
-            isDeposit: true,
-        },
-        {
-            id: '2',
-            type: 'Crypto Deposit - BTC',
-            status: 'Successful',
-            amount: '20,000',
-            date: '06 Oct, 25 - 08:00 PM',
-            isDeposit: true,
-        },
-        {
-            id: '3',
-            type: 'Crypto Deposit - BTC',
-            status: 'Successful',
-            amount: '20,000',
-            date: '06 Oct, 25 - 08:00 PM',
-            isDeposit: true,
-        },
-        {
-            id: '4',
-            type: 'Crypto Deposit - BTC',
-            status: 'Successful',
-            amount: '20,000',
-            date: '06 Oct, 25 - 08:00 PM',
-            isDeposit: true,
-        },
-    ];
+    // Loading state
+    if (isLoading && !account) {
+        return (
+            <View style={[styles.container, styles.loadingContainer]}>
+                <StatusBar style="light" />
+                <ActivityIndicator size="large" color="#FFFFFF" />
+                <ThemedText style={styles.loadingText}>Loading wallet...</ThemedText>
+            </View>
+        );
+    }
 
     return (
         <View style={styles.container}>
@@ -93,7 +182,7 @@ const CryptoWalletScreen = () => {
                             resizeMode="contain"
                         />
                     </View>
-                    <ThemedText style={styles.balanceAmount}>{balance}</ThemedText>
+                    <ThemedText style={styles.balanceAmount}>{parseFloat(balance).toFixed(4)}</ThemedText>
                     <ThemedText style={styles.balanceUsdValue}>{usdValue}</ThemedText>
                 </View>
 
@@ -108,6 +197,7 @@ const CryptoWalletScreen = () => {
                             usdValue,
                             icon,
                             iconBackground,
+                            blockchain,
                         })}
                     >
                         <View style={styles.actionButtonIcon}>
@@ -129,6 +219,7 @@ const CryptoWalletScreen = () => {
                             usdValue,
                             icon,
                             iconBackground,
+                            blockchain,
                         })}
                     >
                         <View style={styles.actionButtonIcon}>
@@ -150,6 +241,7 @@ const CryptoWalletScreen = () => {
                             usdValue,
                             icon,
                             iconBackground,
+                            blockchain,
                         })}
                     >
                         <View style={styles.actionButtonIcon}>
@@ -171,6 +263,7 @@ const CryptoWalletScreen = () => {
                             usdValue,
                             icon,
                             iconBackground,
+                            blockchain,
                         })}
                     >
                         <View style={styles.actionButtonIcon}>
@@ -190,49 +283,98 @@ const CryptoWalletScreen = () => {
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scrollContent}
                 style={styles.scrollView}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isRefetching}
+                        onRefresh={onRefresh}
+                        tintColor="#1B800F"
+                        colors={['#1B800F']}
+                    />
+                }
             >
                 {/* Recent Transactions Section */}
                 <View style={styles.recentTransactionsHeader}>
                     <ThemedText style={styles.recentTransactionsTitle}>Recent Transactions</ThemedText>
-                    <TouchableOpacity onPress={() => navigation.navigate('AllTransactions')} activeOpacity={0.8}>
+                    <TouchableOpacity 
+                        onPress={() => navigation.navigate('AllTransactions', { 
+                            initialFilter: 'Crypto',
+                            wallet_type: 'crypto'
+                        })} 
+                        activeOpacity={0.8}
+                    >
                         <ThemedText style={styles.viewAllText}>View All</ThemedText>
                     </TouchableOpacity>
                 </View>
 
                 {/* Transaction List */}
                 <View style={styles.transactionList}>
-                    {recentTransactions.map((transaction) => (
-                        <TouchableOpacity
-                            key={transaction.id}
-                            style={styles.transactionItem}
-                            onPress={() => {
-                                navigation.navigate('TransactionHistory', {
-                                    type: 'crypto',
-                                    transactionData: {
-                                        ...transaction,
-                                        cryptoType: 'Receive',
-                                    },
-                                });
-                            }}
-                            activeOpacity={0.8}
-                        >
-                            <View style={styles.transactionIcon}>
-                                <Image
-                                    source={require('../../assets/sent (2).png')}
-                                    style={styles.transactionIconImage}
-                                    resizeMode="contain"
-                                />
-                            </View>
-                            <View style={styles.transactionContent}>
-                                <ThemedText style={styles.transactionType}>{transaction.type}</ThemedText>
-                                <ThemedText style={styles.transactionStatus}>{transaction.status}</ThemedText>
-                            </View>
-                            <View style={styles.transactionRight}>
-                                <ThemedText style={styles.transactionAmount}>{transaction.amount}</ThemedText>
-                                <ThemedText style={styles.transactionDate}>{transaction.date}</ThemedText>
-                            </View>
-                        </TouchableOpacity>
-                    ))}
+                    {error ? (
+                        <View style={styles.emptyContainer}>
+                            <ThemedText style={styles.errorText}>
+                                Failed to load transactions. Pull to refresh.
+                            </ThemedText>
+                        </View>
+                    ) : formattedTransactions.length > 0 ? (
+                        formattedTransactions.map((transaction) => (
+                            <TouchableOpacity
+                                key={transaction.id || transaction.transaction_id}
+                                style={styles.transactionItem}
+                                onPress={() => {
+                                    navigation.navigate('TransactionHistory', {
+                                        type: 'crypto',
+                                        transactionData: {
+                                            id: transaction.id,
+                                            transaction_id: transaction.transaction_id,
+                                            type: transaction.type,
+                                            status: transaction.status,
+                                            amount: transaction.amount,
+                                            date: transaction.date,
+                                            currency: currency,
+                                            blockchain: transaction.blockchain,
+                                            cryptoType: transaction.isDeposit ? 'Receive' : 'Send',
+                                            ...transaction,
+                                        },
+                                    });
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <View style={styles.transactionIcon}>
+                                    <Image
+                                        source={
+                                            transaction.isDeposit
+                                                ? require('../../assets/sent (1).png')
+                                                : require('../../assets/sent (2).png')
+                                        }
+                                        style={styles.transactionIconImage}
+                                        resizeMode="contain"
+                                    />
+                                </View>
+                                <View style={styles.transactionContent}>
+                                    <ThemedText style={styles.transactionType}>{transaction.type}</ThemedText>
+                                    <ThemedText style={[
+                                        styles.transactionStatus,
+                                        transaction.status === 'Failed' && styles.transactionStatusFailed,
+                                        transaction.status === 'Pending' && styles.transactionStatusPending,
+                                    ]}>
+                                        {transaction.status}
+                                    </ThemedText>
+                                </View>
+                                <View style={styles.transactionRight}>
+                                    <ThemedText style={[
+                                        styles.transactionAmount,
+                                        !transaction.isDeposit && styles.transactionAmountWithdrawal,
+                                    ]}>
+                                        {transaction.isDeposit ? '+' : '-'}{transaction.amount} {currency}
+                                    </ThemedText>
+                                    <ThemedText style={styles.transactionDate}>{transaction.date}</ThemedText>
+                                </View>
+                            </TouchableOpacity>
+                        ))
+                    ) : (
+                        <View style={styles.emptyContainer}>
+                            <ThemedText style={styles.emptyText}>No transactions yet</ThemedText>
+                        </View>
+                    )}
                 </View>
             </ScrollView>
         </View>
@@ -294,7 +436,7 @@ const styles = StyleSheet.create({
         height: 60,
     },
     balanceAmount: {
-        fontSize: 40,
+        fontSize: 25,
         fontWeight: '600',
         color: '#FFFFFF',
         marginBottom: 8,
@@ -426,6 +568,41 @@ const styles = StyleSheet.create({
     transactionDate: {
         fontSize: 8,
         color: '#9CA3AF',
+    },
+    transactionAmountWithdrawal: {
+        color: '#008000',
+    },
+    transactionStatusFailed: {
+        color: '#EF4444',
+    },
+    transactionStatusPending: {
+        color: '#F59E0B',
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#1B800F',
+    },
+    loadingText: {
+        marginTop: 12,
+        fontSize: 14,
+        color: '#FFFFFF',
+    },
+    emptyContainer: {
+        width: '100%',
+        padding: 20,
+        alignItems: 'center',
+    },
+    emptyText: {
+        fontSize: 14,
+        color: '#9CA3AF',
+        textAlign: 'center',
+    },
+    errorText: {
+        fontSize: 14,
+        color: '#EF4444',
+        textAlign: 'center',
     },
 });
 

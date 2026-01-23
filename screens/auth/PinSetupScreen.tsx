@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Image, StyleSheet, TouchableOpacity, Dimensions, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -71,33 +71,39 @@ const PinSetupScreen = () => {
           <ThemedText style={styles.skipButtonText}>Skip</ThemedText>
         </TouchableOpacity>
 
-        {/* Title */}
-        <ThemedText weight='semibold' style={styles.title}>Setup Pin</ThemedText>
-        
-        {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>Setup your 4 digit pin to complete transactions</ThemedText>
+        <ScrollView
+          contentContainerStyle={styles.cardContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Title */}
+          <ThemedText weight='semibold' style={styles.title}>Setup Pin</ThemedText>
+          
+          {/* Subtitle */}
+          <ThemedText style={styles.subtitle}>Setup your 4 digit pin to complete transactions</ThemedText>
 
-        {/* Security Icon */}
-        <View style={styles.iconContainer}>
-          <Image 
-            source={require('../../assets/security-safe.png')} 
-            style={styles.securityIcon}
-            resizeMode="contain"
-          />
-        </View>
-
-        {/* PIN Input Fields */}
-        <View style={styles.pinContainer}>
-          {[0, 1, 2, 3].map((index) => (
-            <View
-              key={index}
-              style={[
-                styles.pinDot,
-                pin.length > index && styles.pinDotFilled,
-              ]}
+          {/* Security Icon */}
+          <View style={styles.iconContainer}>
+            <Image 
+              source={require('../../assets/security-safe.png')} 
+              style={styles.securityIcon}
+              resizeMode="contain"
             />
-          ))}
-        </View>
+          </View>
+
+          {/* PIN Input Fields */}
+          <View style={styles.pinContainer}>
+            {[0, 1, 2, 3].map((index) => (
+              <View
+                key={index}
+                style={[
+                  styles.pinDot,
+                  pin.length > index && styles.pinDotFilled,
+                ]}
+              />
+            ))}
+          </View>
+        </ScrollView>
 
         {/* Numpad */}
         <View style={styles.numpadContainer}>
@@ -168,8 +174,9 @@ const PinSetupScreen = () => {
               <Ionicons name="backspace-outline" size={24} color="#000000" />
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.nextButton}
+              style={[styles.nextButton, pin.length !== 4 && styles.nextButtonDisabled]}
               onPress={handleNext}
+              disabled={pin.length !== 4}
             >
               <ThemedText style={styles.nextButtonText}>Next</ThemedText>
             </TouchableOpacity>
@@ -220,8 +227,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
-    paddingTop: 30,
     paddingHorizontal: 20,
+  },
+  cardContent: {
+    paddingTop: 30,
+    paddingBottom: 340, // Space for numpad
   },
   skipButton: {
     position: 'absolute',
@@ -292,54 +302,58 @@ const styles = StyleSheet.create({
   },
   numpadLeft: {
     flex: 1,
-    maxWidth: 290,
+    maxWidth: 280,
   },
   numpadRight: {
-    width: 90,
-   marginLeft: 15,
+    width: 85,
+    marginLeft: 10,
     justifyContent: 'flex-start',
     alignItems: 'center',
   },
   numpadRow: {
     flexDirection: 'row',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   numButton: {
-    width: 90,
-    height: 60,
+    width: 85,
+    height: 58,
     backgroundColor: '#efefef',
     borderRadius: 100,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 10,
+    marginRight: 8,
   },
   numButtonText: {
-    fontSize: 30,
+    fontSize: 28,
     fontWeight: '400',
     color: '#000000',
   },
   backspaceButton: {
-    width: 90,
-    height: 60,
+    width: 85,
+    height: 58,
     backgroundColor: '#efefef',
     borderRadius: 100,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   nextButton: {
-    width: 90,
-    height: 200,
+    width: 85,
+    height: 150,
     backgroundColor: '#42AC36',
     borderRadius: 100,
     justifyContent: 'center',
     alignItems: 'center',
+    marginTop: 20,
   },
   nextButtonText: {
     fontSize: 14,
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  nextButtonDisabled: {
+    opacity: 0.6,
   },
 });
 

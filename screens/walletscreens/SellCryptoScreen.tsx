@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -10,6 +10,8 @@ import {
     Dimensions,
     Modal,
     Pressable,
+    Alert,
+    ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,69 +20,195 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { usePreviewSellCrypto, useConfirmSellCrypto } from '../../mutations/cryptoMutations';
+import { useUsdtBlockchains } from '../../queries/cryptoQueries';
 
 const { width } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type SellCryptoRouteProp = RouteProp<RootStackParamList, 'SellCrypto'>;
 
-const networks = [
-    { id: 'BTC', name: 'BTC (Bitcoin)', creditingTime: '1 min' },
-    { id: 'LIGHTNING', name: 'LIGHTNING (Lightning Network)', creditingTime: '1 min' },
-    { id: 'BEP20', name: 'BEP20 (Binance Smart Chain)', creditingTime: '1 min' },
-];
-
 const SellCryptoScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const route = useRoute<SellCryptoRouteProp>();
-    const { cryptoType, balance, usdValue, icon, iconBackground } = route.params || {
+    const { cryptoType, balance, usdValue, icon, iconBackground, blockchain } = route.params || {
         cryptoType: 'BTC',
         balance: '0.00023',
         usdValue: '$20,000',
         icon: require('../../assets/popular1.png'),
         iconBackground: '#FFA5004D',
+        blockchain: 'BTC',
     };
 
-    const [amount, setAmount] = useState('200');
-    const [currencyType, setCurrencyType] = useState<'BTC' | 'USD'>('USD');
-    const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
+    const [amount, setAmount] = useState('');
+    const [currencyType, setCurrencyType] = useState<'BTC' | 'USD'>('BTC'); // Note: Always enter amount in crypto, USD toggle is for reference only
+    const [selectedNetwork, setSelectedNetwork] = useState<string | null>(blockchain || null);
+    const [selectedNetworkId, setSelectedNetworkId] = useState<string | null>(blockchain || null);
     const [showNetworkModal, setShowNetworkModal] = useState(false);
     const [showSummaryModal, setShowSummaryModal] = useState(false);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
+    const [previewData, setPreviewData] = useState<any>(null);
+    const [confirmData, setConfirmData] = useState<any>(null);
+    const [amountToReceive, setAmountToReceive] = useState('N0.00');
 
-    // Calculate amount to receive in Naira (example calculation)
-    const amountToReceive = 'N200,000';
+    // Fetch USDT blockchains if needed
+    const { data: blockchainsData } = useUsdtBlockchains();
+    
+    // Mutations
+    const previewMutation = usePreviewSellCrypto();
+    const confirmMutation = useConfirmSellCrypto();
 
-    const handleProceed = () => {
-        if (!selectedNetwork) {
-            setShowNetworkModal(true);
-            return;
-        }
-        setShowSummaryModal(true);
+    // Get crypto amount (always in crypto for sell)
+    const getCryptoAmount = (): number => {
+        if (!amount) return 0;
+        const amountNum = parseFloat(amount);
+        if (isNaN(amountNum)) return 0;
+        // For sell, amount is always in crypto
+        return amountNum;
     };
 
-    const handleSummaryProceed = () => {
+    // Get available networks based on crypto type
+    const getAvailableNetworks = () => {
+        if (cryptoType === 'USDT' && blockchainsData?.data) {
+            return blockchainsData.data.map((bc: any) => ({
+                id: bc.blockchain,
+                name: `${bc.blockchain} (${bc.blockchain_name || bc.blockchain})`,
+                creditingTime: bc.crediting_time || '1 min',
+            }));
+        }
+        // For other cryptos, use default blockchain
+        return [{
+            id: cryptoType,
+            name: `${cryptoType} (${cryptoType})`,
+            creditingTime: '1 min',
+        }];
+    };
+
+    const networks = getAvailableNetworks();
+
+    // Set default network on mount
+    useEffect(() => {
+        if (!selectedNetwork && networks.length > 0) {
+            const defaultNetwork = networks[0];
+            setSelectedNetwork(defaultNetwork.name);
+            setSelectedNetworkId(defaultNetwork.id);
+        }
+    }, [cryptoType, blockchainsData]);
+
+    // For USDT, ensure blockchain is selected
+    useEffect(() => {
+        if (cryptoType === 'USDT' && !selectedNetworkId && blockchainsData?.data && blockchainsData.data.length > 0) {
+            const defaultBlockchain = blockchainsData.data[0];
+            setSelectedNetwork(`${defaultBlockchain.blockchain} (${defaultBlockchain.blockchain_name || defaultBlockchain.blockchain})`);
+            setSelectedNetworkId(defaultBlockchain.blockchain);
+        }
+    }, [cryptoType, blockchainsData, selectedNetworkId]);
+
+    // Handle Max button
+    const handleMaxAmount = () => {
+        const balanceNum = parseFloat(balance.replace(/,/g, ''));
+        if (!isNaN(balanceNum)) {
+            setAmount(balanceNum.toString());
+        }
+    };
+
+    // Handle preview transaction
+    const handleProceed = async () => {
+        if (!selectedNetworkId || !amount) {
+            Alert.alert('Error', 'Please fill all fields');
+            return;
+        }
+
+        const cryptoAmount = getCryptoAmount();
+        if (cryptoAmount <= 0) {
+            Alert.alert('Error', 'Please enter a valid amount');
+            return;
+        }
+
+        // Check if amount exceeds balance
+        const balanceNum = parseFloat(balance.replace(/,/g, ''));
+        if (cryptoAmount > balanceNum) {
+            Alert.alert('Error', 'Amount exceeds available balance');
+            return;
+        }
+
+        // If USD is selected, wait for exchange rate
+        if (currencyType === 'USD' && !exchangeRateData?.data) {
+            Alert.alert('Error', 'Please wait for exchange rate to load');
+            return;
+        }
+
+        try {
+            const result = await previewMutation.mutateAsync({
+                currency: cryptoType,
+                blockchain: selectedNetworkId,
+                amount: cryptoAmount,
+            });
+
+            if (result.success) {
+                setPreviewData(result.data);
+                setAmountToReceive(`N${result.data.amount_to_receive.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+                setShowSummaryModal(true);
+            } else {
+                Alert.alert('Error', result.message || 'Failed to preview transaction');
+            }
+        } catch (error: any) {
+            console.error('Preview error:', error);
+            Alert.alert(
+                'Error',
+                error.response?.data?.message || error.message || 'Failed to preview transaction'
+            );
+        }
+    };
+
+    // Handle confirm transaction
+    const handleSummaryProceed = async () => {
         setShowSummaryModal(false);
-        setShowSuccessModal(true);
+        
+        try {
+            const cryptoAmount = getCryptoAmount();
+            const confirmResult = await confirmMutation.mutateAsync({
+                currency: cryptoType,
+                blockchain: selectedNetworkId!,
+                amount: cryptoAmount,
+            });
+
+            if (confirmResult.success) {
+                setConfirmData(confirmResult.data);
+                setShowSuccessModal(true);
+            } else {
+                Alert.alert('Error', confirmResult.message || 'Transaction failed');
+            }
+        } catch (error: any) {
+            console.error('Confirm error:', error);
+            Alert.alert(
+                'Error',
+                error.response?.data?.message || error.message || 'Transaction failed'
+            );
+        }
     };
 
     const handleSuccessTransaction = () => {
         setShowSuccessModal(false);
-        navigation.navigate('TransactionHistory', {
-            type: 'crypto',
-            transactionData: {
-                type: `Crypto Sell - ${cryptoType}`,
-                amount: amount,
-                date: new Date().toLocaleString(),
-                status: 'Successful',
-                cryptoType: 'Sell',
-                network: selectedNetwork,
-                amountToReceive: amountToReceive,
-                paymentMethod: 'Naira',
-                txHash: '1234567890sk2kdmwkdqkdskw',
-                transactionId: '2348hf8283hfc92eni',
-            },
-        });
+        if (confirmData?.transaction) {
+            navigation.navigate('TransactionHistory', {
+                type: 'crypto',
+                transactionData: {
+                    id: confirmData.transaction.id,
+                    transaction_id: confirmData.transaction.transaction_id,
+                    type: `Crypto Sell - ${cryptoType}`,
+                    amount: confirmData.transaction.amount,
+                    date: confirmData.transaction.created_at,
+                    status: confirmData.transaction.status,
+                    cryptoType: 'Sell',
+                    network: selectedNetwork,
+                    amountToReceive: amountToReceive,
+                    paymentMethod: 'Naira',
+                },
+            });
+        } else {
+            navigation.goBack();
+        }
     };
 
     return (
@@ -147,7 +275,11 @@ const SellCryptoScreen = () => {
                         keyboardType="numeric"
                         placeholder="0"
                     />
-                    <TouchableOpacity style={styles.maxButton} activeOpacity={0.8}>
+                    <TouchableOpacity 
+                        style={styles.maxButton} 
+                        activeOpacity={0.8}
+                        onPress={handleMaxAmount}
+                    >
                         <ThemedText style={styles.maxButtonText}>Max</ThemedText>
                     </TouchableOpacity>
                 </View>
@@ -165,36 +297,50 @@ const SellCryptoScreen = () => {
                 </TouchableOpacity>
 
                 {/* You Will Receive Card */}
-                <LinearGradient
-                    colors={['#D9FDD6', '#21D721']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.receiveCard}
-                >
-                    <ThemedText style={styles.receiveLabel}>You will receive</ThemedText>
-                    <ThemedText style={styles.receiveAmount}>{amountToReceive}</ThemedText>
-                    <View style={{backgroundColor: '#1B800F', padding: 5, borderBottomLeftRadius:20, borderBottomRightRadius:20}}>
-                    <ThemedText style={styles.receiveSubtext}>Funds will be deposited into your naira wallet</ThemedText>
-                    </View>
-                </LinearGradient>
+                {previewData && (
+                    <LinearGradient
+                        colors={['#D9FDD6', '#21D721']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.receiveCard}
+                    >
+                        <ThemedText style={styles.receiveLabel}>You will receive</ThemedText>
+                        <ThemedText style={styles.receiveAmount}>{amountToReceive}</ThemedText>
+                        <View style={{backgroundColor: '#1B800F', padding: 5, borderBottomLeftRadius:20, borderBottomRightRadius:20}}>
+                        <ThemedText style={styles.receiveSubtext}>Funds will be deposited into your naira wallet</ThemedText>
+                        </View>
+                    </LinearGradient>
+                )}
 
                 {/* Fee Information */}
-                <View style={styles.feeContainer}>
-                    <Image
-                        source={require('../../assets/CoinVertical (1).png')}
-                        style={styles.feeIcon}
-                        resizeMode="contain"
-                    />
-                    <ThemedText style={styles.feeText}>Fee :$3 = N5,500</ThemedText>
-                </View>
+                {previewData && (
+                    <View style={styles.feeContainer}>
+                        <Image
+                            source={require('../../assets/CoinVertical (1).png')}
+                            style={styles.feeIcon}
+                            resizeMode="contain"
+                        />
+                        <ThemedText style={styles.feeText}>
+                            Fee: {previewData.fee_in_crypto?.toFixed(8) || '0.00000000'} {cryptoType} = N{previewData.fee_in_ngn?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}
+                        </ThemedText>
+                    </View>
+                )}
 
                 {/* Proceed Button */}
                 <TouchableOpacity
-                    style={styles.proceedButton}
+                    style={[
+                        styles.proceedButton,
+                        (previewMutation.isPending || !amount || !selectedNetworkId) && styles.proceedButtonDisabled
+                    ]}
                     onPress={handleProceed}
                     activeOpacity={0.8}
+                    disabled={previewMutation.isPending || !amount || !selectedNetworkId}
                 >
-                    <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    {previewMutation.isPending ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                        <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    )}
                 </TouchableOpacity>
             </ScrollView>
 
@@ -235,6 +381,7 @@ const SellCryptoScreen = () => {
                                     style={styles.networkOption}
                                     onPress={() => {
                                         setSelectedNetwork(network.name);
+                                        setSelectedNetworkId(network.id);
                                         setShowNetworkModal(false);
                                     }}
                                     activeOpacity={0.8}
@@ -286,7 +433,7 @@ const SellCryptoScreen = () => {
                             <ThemedText style={styles.pendingText}>Pending</ThemedText>
                             <ThemedText style={styles.pendingDescription}>
                                 You are about to make a sale of{' '}
-                                <ThemedText style={styles.pendingAmount}>{balance.replace('.', ',')} {cryptoType}</ThemedText>
+                                <ThemedText style={styles.pendingAmount}>{amount} {cryptoType}</ThemedText>
                             </ThemedText>
                         </View>
 
@@ -294,19 +441,27 @@ const SellCryptoScreen = () => {
                         <View style={styles.summaryDetails}>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Amount:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{amount} {currencyType === 'USD' ? 'USD' : cryptoType}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>
+                                    {previewData?.crypto_amount || amount} {cryptoType}
+                                </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Fee:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>0.0000000012 {cryptoType}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>
+                                    {previewData?.fee_in_crypto?.toFixed(8) || '0.00000000'} {cryptoType}
+                                </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Total Amount:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{balance.replace('.', ',')} {cryptoType}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>
+                                    {previewData?.total_crypto_amount?.toFixed(8) || amount} {cryptoType}
+                                </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
-                                <ThemedText style={styles.summaryLabel}>Amount in USD:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{usdValue}</ThemedText>
+                                <ThemedText style={styles.summaryLabel}>Exchange Rate:</ThemedText>
+                                <ThemedText style={styles.summaryValue}>
+                                    1 {cryptoType} = N{previewData?.exchange_rate?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}
+                                </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Amount to receive:</ThemedText>
@@ -318,18 +473,26 @@ const SellCryptoScreen = () => {
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Payment Method:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>Naira</ThemedText>
+                                <ThemedText style={styles.summaryValue}>Naira Wallet</ThemedText>
                             </View>
                         </View>
 
                         {/* Action Buttons */}
                         <View style={styles.summaryButtons}>
                             <TouchableOpacity
-                                style={styles.proceedSummaryButton}
+                                style={[
+                                    styles.proceedSummaryButton,
+                                    confirmMutation.isPending && styles.proceedSummaryButtonDisabled
+                                ]}
                                 onPress={handleSummaryProceed}
                                 activeOpacity={0.8}
+                                disabled={confirmMutation.isPending}
                             >
-                                <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                {confirmMutation.isPending ? (
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                    <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                )}
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.cancelButton}
@@ -371,7 +534,8 @@ const SellCryptoScreen = () => {
                         <ThemedText style={styles.successTitle}>Success</ThemedText>
                         <ThemedText style={styles.successMessage}>
                             You have successfully completed a sale of{' '}
-                            <ThemedText style={styles.successAmount}>{balance.replace('.', ',')} {cryptoType}</ThemedText>
+                            <ThemedText style={styles.successAmount}>{amount} {cryptoType}</ThemedText>
+                            {'\n'}You received {amountToReceive}
                         </ThemedText>
                         <View style={styles.successButtons}>
                             <TouchableOpacity
@@ -450,7 +614,7 @@ const styles = StyleSheet.create({
         alignItems: 'baseline',
     },
     balanceAmount: {
-        fontSize: 50,
+        fontSize: 25,
         fontWeight: '700',
         color: '#FFFFFF',
         marginRight: 8,
@@ -591,6 +755,12 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '400',
         color: '#FFFFFF',
+    },
+    proceedButtonDisabled: {
+        opacity: 0.6,
+    },
+    proceedSummaryButtonDisabled: {
+        opacity: 0.6,
     },
     networkModalOverlay: {
         flex: 1,

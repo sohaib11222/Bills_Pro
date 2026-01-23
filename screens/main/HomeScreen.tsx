@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -7,14 +7,19 @@ import {
   Dimensions,
   ScrollView,
   TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useDashboard } from '../../queries/dashboardQueries';
+import { useWalletBalance } from '../../queries/walletQueries';
+import { getProfileImage } from '../../services/storage/appStorage';
 
 const { width, height } = Dimensions.get('window');
 
@@ -22,9 +27,118 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const HomeScreen = () => {
   const navigation = useNavigation<RootNavigationProp>();
+  const scrollViewRef = useRef<ScrollView>(null);
   const [showWallets, setShowWallets] = useState(false);
   const [selectedWallet, setSelectedWallet] = useState<'naira' | 'crypto'>('naira');
   const [isBalanceHidden, setIsBalanceHidden] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
+
+  // Load profile image when screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      const loadProfileImage = async () => {
+        const storedImage = await getProfileImage();
+        if (storedImage) {
+          setProfileImageUri(storedImage);
+        }
+      };
+      loadProfileImage();
+    }, [])
+  );
+
+  // Fetch dashboard data
+  const { 
+    data: dashboardData, 
+    isLoading: isLoadingDashboard, 
+    error: dashboardError, 
+    refetch: refetchDashboard 
+  } = useDashboard();
+  
+  // Fetch wallet balance
+  const { 
+    data: walletBalanceData, 
+    isLoading: isLoadingBalance,
+    refetch: refetchWalletBalance 
+  } = useWalletBalance();
+
+  // Handle pull to refresh
+  const onRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await Promise.all([refetchDashboard(), refetchWalletBalance()]);
+      // Reload profile image on refresh
+      const storedImage = await getProfileImage();
+      if (storedImage) {
+        setProfileImageUri(storedImage);
+      }
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // Extract data
+  const user = dashboardData?.data?.user;
+  const fiatBalance = dashboardData?.data?.balances?.fiat?.balance || 0;
+  const cryptoBalance = dashboardData?.data?.balances?.crypto?.total_usd || 0;
+  const cryptoBreakdown = dashboardData?.data?.balances?.crypto?.breakdown || [];
+
+  // Format balance for display
+  const formatBalance = (amount: number, currency: 'NGN' | 'USD') => {
+    if (isBalanceHidden) return '******';
+    const formatter = new Intl.NumberFormat('en-NG', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    return formatter.format(amount);
+  };
+
+  // Helper function to get crypto icon
+  const getCryptoIcon = (currency: string) => {
+    const icons: Record<string, any> = {
+      'BTC': require('../../assets/popular1.png'),
+      'ETH': require('../../assets/popular2.png'),
+      'USDT': require('../../assets/popular3.png'),
+      'USDC': require('../../assets/popular4.png'),
+    };
+    return icons[currency] || require('../../assets/popular1.png');
+  };
+
+  // Helper function to get crypto color
+  const getCryptoColor = (currency: string) => {
+    const colors: Record<string, string> = {
+      'BTC': '#FFA5004D',
+      'ETH': '#0000FF4D',
+      'USDT': '#0080004D',
+      'USDC': '#0000FF4D',
+    };
+    return colors[currency] || '#42AC36';
+  };
+
+  // Loading state
+  if (isLoadingDashboard || isLoadingBalance) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <StatusBar style="light" />
+        <ActivityIndicator size="large" color="#42AC36" />
+      </View>
+    );
+  }
+
+  // Error state
+  if (dashboardError) {
+    return (
+      <View style={[styles.container, styles.errorContainer]}>
+        <StatusBar style="light" />
+        <ThemedText style={styles.errorText}>Failed to load dashboard</ThemedText>
+        <TouchableOpacity onPress={() => refetchDashboard()} style={styles.retryButton}>
+          <ThemedText style={styles.retryButtonText}>Retry</ThemedText>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -36,21 +150,34 @@ const HomeScreen = () => {
         resizeMode="cover"
       >
         <ScrollView
+          ref={scrollViewRef}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={onRefresh}
+              tintColor="#42AC36"
+              colors={['#42AC36']}
+              progressViewOffset={20}
+              size="large"
+            />
+          }
         >
           <View style={styles.pageContent}>
             {/* Top welcome + balance */}
             <View style={styles.headerContainer}>
               <View style={styles.welcomeRow}>
                 <Image
-                  source={require('../../assets/dummy_avatar.png')}
+                  source={profileImageUri ? { uri: profileImageUri } : require('../../assets/dummy_avatar.png')}
                   style={styles.avatar}
                   resizeMode="cover"
                 />
                 <View style={styles.welcomeTextContainer}>
                   <ThemedText style={styles.welcomeLabel}>Welcome</ThemedText>
-                  <ThemedText style={styles.welcomeName}>Qamardeen AbdulMalik</ThemedText>
+                  <ThemedText style={styles.welcomeName}>
+                    {user?.name || user?.first_name || 'User'}
+                  </ThemedText>
                 </View>
                 <TouchableOpacity
                   style={styles.iconCircle}
@@ -99,11 +226,9 @@ const HomeScreen = () => {
                     <ThemedText style={styles.balanceCurrency}>
                       {selectedWallet === 'crypto' ? '$ ' : '₦ '}
                     </ThemedText>
-                    {isBalanceHidden
-                      ? '******'
-                      : selectedWallet === 'crypto'
-                      ? '200.00'
-                      : '10,000.00'}
+                    {selectedWallet === 'crypto'
+                      ? formatBalance(cryptoBalance, 'USD')
+                      : formatBalance(fiatBalance, 'NGN')}
                   </ThemedText>
                 </View>
               </View>
@@ -170,21 +295,25 @@ const HomeScreen = () => {
                       key: 'Deposit',
                       label: 'Deposit',
                       icon: require('../../assets/deposit.png'),
+                      onPress: () => navigation.navigate('DepositFunds'),
                     },
                     {
                       key: 'Bill',
                       label: 'Bill Payment',
                       icon: require('../../assets/bill_payments.png'),
+                      onPress: () => navigation.navigate('BillPayments'),
                     },
                     {
                       key: 'Virtual',
                       label: 'VirtualCards',
                       icon: require('../../assets/virtual_cards.png'),
+                      onPress: () => navigation.navigate('Cards'),
                     },
                     {
                       key: 'Crypto',
                       label: 'Crypto',
                       icon: require('../../assets/bitcoin-ellipse.png'),
+                      onPress: () => setSelectedWallet('crypto'),
                     },
                   ].map((item) => {
                     const isActive = item.key === 'Crypto';
@@ -196,13 +325,7 @@ const HomeScreen = () => {
                           isActive && styles.quickActionCardActive,
                         ]}
                         activeOpacity={0.8}
-                        onPress={() => {
-                          if (item.key === 'Bill') {
-                            navigation.navigate('BillPayments');
-                          } else if (item.key === 'Deposit') {
-                            navigation.navigate('DepositFunds');
-                          }
-                        }}
+                        onPress={item.onPress}
                       >
                         <Image
                           source={item.icon}
@@ -242,7 +365,11 @@ const HomeScreen = () => {
                   <ThemedText style={styles.promoSubtitle}>
                     Create dollar virtual cards for all forms of payment
                   </ThemedText>
-                  <TouchableOpacity style={styles.promoButton}>
+                  <TouchableOpacity 
+                    style={styles.promoButton}
+                    activeOpacity={0.8}
+                    onPress={() => navigation.navigate('Cards')}
+                  >
                     <ThemedText style={styles.promoButtonText}>Proceed</ThemedText>
                   </TouchableOpacity>
                 </View>
@@ -259,71 +386,80 @@ const HomeScreen = () => {
                 <ThemedText style={styles.quickServicesTitle}>
                   {selectedWallet === 'crypto' ? 'Popular Crypto' : 'Quick Services'}
                 </ThemedText>
-                <ThemedText style={styles.quickServicesViewAll}>View All</ThemedText>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    if (selectedWallet === 'crypto') {
+                      navigation.navigate('Wallets');
+                    } else {
+                      navigation.navigate('BillPayments');
+                    }
+                  }}
+                >
+                  <ThemedText style={styles.quickServicesViewAll}>View All</ThemedText>
+                </TouchableOpacity>
               </View>
 
               {selectedWallet === 'crypto' ? (
                 <View style={styles.popularCryptoRow}>
-                  {[
-                    {
-                      key: 'BTC',
-                      label: 'BTC',
-                      value: '0.001',
-                      icon: require('../../assets/popular1.png'),
-                      color: '#FFA5004D',
-                    },
-                    {
-                      key: 'ETH',
-                      label: 'ETH',
-                      value: '0.001',
-                      icon: require('../../assets/popular2.png'),
-                      color: '#0000FF4D',
-                    },
-                    {
-                      key: 'USDT',
-                      label: 'USDT',
-                      value: '0.001',
-                      icon: require('../../assets/popular3.png'),
-                      color: '#0080004D',
-                    },
-                    {
-                      key: 'USDC',
-                      label: 'USDC',
-                      value: '0.001',
-                      icon: require('../../assets/popular4.png'),
-                      color: '#0000FF4D',
-                    },
-                    {
-                      key: 'More',
-                      label: 'More',
-                      value: '',
-                      icon: null,
-                      color: '#42AC36',
-                    },
-                  ].map((item) => (
-                    <View key={item.key} style={styles.popularCryptoItem}>
-                      <View
-                        style={[
-                          styles.popularCryptoIconCircle,
-                          { backgroundColor: item.color },
-                        ]}
+                  {cryptoBreakdown.length > 0 ? (
+                    cryptoBreakdown.slice(0, 4).map((crypto: any) => (
+                      <TouchableOpacity
+                        key={`${crypto.blockchain}_${crypto.currency}`}
+                        style={styles.popularCryptoItem}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          navigation.navigate('SelectCrypto', {
+                            mode: 'view',
+                            currency: crypto.currency,
+                            blockchain: crypto.blockchain,
+                          });
+                        }}
                       >
-                        {item.icon ? (
+                        <View
+                          style={[
+                            styles.popularCryptoIconCircle,
+                            { backgroundColor: getCryptoColor(crypto.currency) },
+                          ]}
+                        >
                           <Image
-                            source={item.icon}
+                            source={getCryptoIcon(crypto.currency)}
                             style={styles.popularCryptoIcon}
                             resizeMode="contain"
                           />
-                        ) : (
-                          <ThemedText style={styles.popularCryptoSymbol}>+</ThemedText>
-                        )}
-                      </View>
-                      <ThemedText style={styles.popularCryptoLabel}>{item.label}</ThemedText>
-                      {item.value ? (
-                        <ThemedText style={styles.popularCryptoValue}>{item.value}</ThemedText>
-                      ) : null}
+                        </View>
+                        <ThemedText style={styles.popularCryptoLabel}>
+                          {crypto.symbol || crypto.currency}
+                        </ThemedText>
+                        <ThemedText style={styles.popularCryptoValue}>
+                          {crypto.balance?.toFixed(4) || '0.0000'}
+                        </ThemedText>
+                      </TouchableOpacity>
+                    ))
+                  ) : (
+                    <View style={styles.emptyCryptoContainer}>
+                      <ThemedText style={styles.emptyCryptoText}>No crypto wallets</ThemedText>
                     </View>
-                  ))}
+                  )}
+                  {cryptoBreakdown.length > 4 && (
+                    <TouchableOpacity
+                      style={styles.popularCryptoItem}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        navigation.navigate('Wallets');
+                      }}
+                    >
+                      <View
+                        style={[
+                          styles.popularCryptoIconCircle,
+                          { backgroundColor: '#42AC36' },
+                        ]}
+                      >
+                        <ThemedText style={styles.popularCryptoSymbol}>+</ThemedText>
+                      </View>
+                      <ThemedText style={styles.popularCryptoLabel}>More</ThemedText>
+                    </TouchableOpacity>
+                  )}
                 </View>
               ) : (
                 <View style={styles.quickServicesRow}>
@@ -333,33 +469,43 @@ const HomeScreen = () => {
                       label: 'Airtime',
                       color: '#FF3B30',
                       icon: require('../../assets/mobile.png'),
+                      onPress: () => navigation.navigate('AirtimeRecharge'),
                     },
                     {
                       key: 'Data',
                       label: 'Data',
                       color: '#007AFF',
                       icon: require('../../assets/global.png'),
+                      onPress: () => navigation.navigate('DataRecharge'),
                     },
                     {
                       key: 'CableTV',
                       label: 'Cable TV',
                       color: '#FF9500',
                       icon: require('../../assets/monitor.png'),
+                      onPress: () => navigation.navigate('CableTV'),
                     },
                     {
                       key: 'Electricity',
                       label: 'Electricity',
                       color: '#34C759',
                       icon: require('../../assets/flash.png'),
+                      onPress: () => navigation.navigate('Electricity'),
                     },
                     {
                       key: 'More',
                       label: 'More',
                       color: '#8E8E93',
                       icon: require('../../assets/Plus.png'),
+                      onPress: () => navigation.navigate('BillPayments'),
                     },
                   ].map((item) => (
-                    <View key={item.key} style={styles.quickServiceItem}>
+                    <TouchableOpacity
+                      key={item.key}
+                      style={styles.quickServiceItem}
+                      activeOpacity={0.8}
+                      onPress={item.onPress}
+                    >
                       <View
                         style={[styles.quickServiceIconCircle, { backgroundColor: item.color }]}
                       >
@@ -370,7 +516,7 @@ const HomeScreen = () => {
                         />
                       </View>
                       <ThemedText style={styles.quickServiceLabel}>{item.label}</ThemedText>
-                    </View>
+                    </TouchableOpacity>
                   ))}
                 </View>
               )}
@@ -404,7 +550,9 @@ const HomeScreen = () => {
               </View>
               <View style={styles.walletTextContainer}>
                 <ThemedText style={styles.walletTitle}>Naira Wallet</ThemedText>
-                <ThemedText style={styles.walletSubtitle}>Bal : N20,000</ThemedText>
+                <ThemedText style={styles.walletSubtitle}>
+                  Bal : ₦{formatBalance(fiatBalance, 'NGN')}
+                </ThemedText>
               </View>
               <View
                 style={[
@@ -433,7 +581,9 @@ const HomeScreen = () => {
               </View>
               <View style={styles.walletTextContainer}>
                 <ThemedText style={styles.walletTitle}>Crypto Wallet</ThemedText>
-                <ThemedText style={styles.walletSubtitle}>Bal : $20,000</ThemedText>
+                <ThemedText style={styles.walletSubtitle}>
+                  Bal : ${formatBalance(cryptoBalance, 'USD')}
+                </ThemedText>
               </View>
               <View
                 style={[
@@ -523,7 +673,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   balanceLabel: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#FFFFFF80',
   },
   balanceChevron: {
@@ -534,7 +684,7 @@ const styles = StyleSheet.create({
     fontWeight: '400',
   },
   balanceValue: {
-    fontSize: 50,
+    fontSize: 30,
     fontWeight: '700',
     color: '#FFFFFF',
   },
@@ -823,6 +973,42 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: 'rgba(0,0,0,0.05)',
     marginVertical: 8,
+  },
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  retryButton: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#0A8F3C',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  emptyCryptoContainer: {
+    width: '100%',
+    padding: 20,
+    alignItems: 'center',
+  },
+  emptyCryptoText: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    textAlign: 'center',
   },
 });
 

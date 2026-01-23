@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { View, ActivityIndicator } from 'react-native';
 import OnboardingNavigator from './navigators/OnboardingNavigator';
 import AuthNavigator from './navigators/AuthNavigator';
 import MainNavigator from './navigators/MainNavigator';
+import { AuthProvider, useAuth } from './services/context/AuthContext';
+import { setOnboardingSeen } from './services/storage/appStorage';
 import BillPaymentsScreen from './screens/billpayments/BillPaymentsScreen';
 import FundCardScreen from './screens/virtualcardscreens/FundCardScreen';
 import WithdrawCardScreen from './screens/virtualcardscreens/WithdrawCardScreen';
@@ -47,21 +50,26 @@ export type RootStackParamList = {
   Auth: undefined;
   Main: undefined;
   BillPayments: undefined;
-  FundCard: undefined;
-  WithdrawCard: undefined;
+  FundCard: { cardId: number };
+  WithdrawCard: { cardId: number };
   CreateCard1: undefined;
   CreateCard2: undefined;
   TransactionHistory: { 
     type?: 'funding' | 'withdrawal' | 'deposit' | 'withdraw' | 'bill_payment' | 'creation' | 'crypto' | 'virtual_card';
     transactionData?: any;
   };
-  AllTransactions: undefined;
+  AllTransactions: { 
+    initialFilter?: 'All Transactions' | 'Bill Payments' | 'Crypto' | 'Virtual Cards';
+    wallet_type?: 'naira' | 'crypto' | 'virtual_card';
+  };
   CryptoWallet: {
-    cryptoType: string;
-    balance: string;
-    usdValue: string;
-    icon: any;
-    iconBackground: string;
+    currency: string;
+    blockchain?: string;
+    cryptoType?: string; // Keep for backward compatibility
+    balance?: string;
+    usdValue?: string;
+    icon?: any;
+    iconBackground?: string;
   };
   SelectCrypto: { mode?: 'send' | 'sell' | 'buy' | 'receive' };
   SendCrypto: {
@@ -70,6 +78,7 @@ export type RootStackParamList = {
     usdValue: string;
     icon: any;
     iconBackground: string;
+    blockchain?: string;
   };
   SellCrypto: {
     cryptoType: string;
@@ -77,6 +86,7 @@ export type RootStackParamList = {
     usdValue: string;
     icon: any;
     iconBackground: string;
+    blockchain?: string;
   };
   BuyCrypto: {
     cryptoType: string;
@@ -84,22 +94,24 @@ export type RootStackParamList = {
     usdValue: string;
     icon: any;
     iconBackground: string;
+    blockchain?: string;
   };
   ReceiveCrypto: {
     cryptoType: string;
     balance?: string;
     usdValue?: string;
-    icon: any;
-    iconBackground: string;
+    icon?: any;
+    iconBackground?: string;
+    blockchain?: string;
   };
   EditProfile: undefined;
   Verification: undefined;
   WithdrawalAccounts: undefined;
-  AddNewAccount: undefined;
+  AddNewAccount: { account?: any } | undefined;
   SecuritySettings: undefined;
   ResetPassword: undefined;
   ResetPasswordCode: { email: string };
-  NewPassword: undefined;
+  NewPassword: { email: string; otp: string } | undefined;
   TransactionPin: undefined;
   Setup2FA: undefined;
   Support: undefined;
@@ -107,7 +119,7 @@ export type RootStackParamList = {
   ChatDetails: { chatId?: string };
   NotificationSettings: undefined;
   DepositFunds: undefined;
-  DepositAccount: { amount: string };
+  DepositAccount: { amount: string; depositData?: any };
   WithdrawFunds: undefined;
   AirtimeRecharge: undefined;
   DataRecharge: undefined;
@@ -120,15 +132,38 @@ export type RootStackParamList = {
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 
-const RootNavigator = () => {
-  const isSignedIn = false; // TODO: wire this to real auth state
-  const hasSeenOnboarding = false; // TODO: wire this to AsyncStorage or similar
+const RootNavigatorContent = () => {
+  const { isAuthenticated, isLoading, hasSeenOnboarding, checkAuth } = useAuth();
+
+  useEffect(() => {
+    // Re-check auth when component mounts
+    checkAuth();
+  }, []);
+
+  // Show loading screen while checking auth state
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1b800f' }}>
+        <ActivityIndicator size="large" color="#42AC36" />
+      </View>
+    );
+  }
+
+  // Determine initial route
+  let initialRouteName: 'Onboarding' | 'Auth' | 'Main' = 'Onboarding';
+  
+  if (hasSeenOnboarding) {
+    initialRouteName = isAuthenticated ? 'Main' : 'Auth';
+  }
+
+  console.log('🚀 Root Navigator - Initial Route:', initialRouteName);
+  console.log('🚀 Root Navigator - Auth State:', { isAuthenticated, hasSeenOnboarding });
 
   return (
     <NavigationContainer>
       <RootStack.Navigator
         screenOptions={{ headerShown: false }}
-        initialRouteName={hasSeenOnboarding ? (isSignedIn ? 'Main' : 'Auth') : 'Onboarding'}
+        initialRouteName={initialRouteName}
       >
         <RootStack.Screen name="Onboarding" component={OnboardingNavigator} />
         <RootStack.Screen name="Auth" component={AuthNavigator} />
@@ -172,6 +207,14 @@ const RootNavigator = () => {
         <RootStack.Screen name="Notifications" component={NotificationsScreen} />
       </RootStack.Navigator>
     </NavigationContainer>
+  );
+};
+
+const RootNavigator = () => {
+  return (
+    <AuthProvider>
+      <RootNavigatorContent />
+    </AuthProvider>
   );
 };
 

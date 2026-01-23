@@ -1,6 +1,8 @@
 import React from 'react';
 import { useFonts } from 'expo-font';
 import { View, ActivityIndicator } from 'react-native';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './services/QueryClient';
 import RootNavigator from './RootNavigator';
 
 export default function App() {
@@ -22,5 +24,9 @@ export default function App() {
     );
   }
 
-  return <RootNavigator />;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <RootNavigator />
+    </QueryClientProvider>
+  );
 }

@@ -13,13 +13,13 @@ import NewPasswordScreen from '../screens/auth/NewPasswordScreen';
 export type AuthStackParamList = {
   Login: undefined;
   Register: undefined;
-  Verify: undefined;
+  Verify: { email: string };
   KYC: undefined;
   PinSetup: undefined;
   ReEnterPin: { initialPin: string };
   ResetPassword: undefined;
-  ResetPasswordCode: undefined;
-  NewPassword: undefined;
+  ResetPasswordCode: { email: string };
+  NewPassword: { email: string; otp: string };
 };
 
 const Stack = createNativeStackNavigator<AuthStackParamList>();

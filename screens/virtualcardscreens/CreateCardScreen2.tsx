@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -10,6 +10,8 @@ import {
   TextInput,
   Modal,
   Pressable,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +19,8 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useCreateVirtualCard } from '../../mutations/virtualCardMutations';
+import { useWalletBalance } from '../../queries/walletQueries';
 
 const { width, height } = Dimensions.get('window');
 
@@ -29,6 +33,11 @@ type CardColor = {
   backgroundColor: string;
 };
 
+// Constants
+const CARD_CREATION_FEE_USD = 3;
+const PROCESSING_FEE_NGN = 500;
+const EXCHANGE_RATE = 1500; // $1 = N1,500
+
 const CreateCardScreen2 = () => {
   const navigation = useNavigation<RootNavigationProp>();
   const [cardName, setCardName] = useState<string>('');
@@ -37,6 +46,22 @@ const CreateCardScreen2 = () => {
   const [selectedWallet, setSelectedWallet] = useState<'naira' | 'crypto'>('naira');
   const [showSummary, setShowSummary] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [showBillingModal, setShowBillingModal] = useState(false);
+  
+  // Billing address state
+  const [billingCountry, setBillingCountry] = useState('Nigeria');
+  const [billingState, setBillingState] = useState('');
+  const [billingCity, setBillingCity] = useState('');
+  const [billingStreet, setBillingStreet] = useState('');
+  const [billingPostalCode, setBillingPostalCode] = useState('');
+  
+  // API hooks
+  const createCardMutation = useCreateVirtualCard();
+  const { data: walletData, isLoading: isLoadingWallet } = useWalletBalance();
+  
+  // Extract wallet balances
+  const nairaBalance = walletData?.data?.fiat?.balance || 0;
+  const cryptoBalanceUsd = walletData?.data?.crypto?.total_usd || 0;
 
   const cardColors: CardColor[] = [
     { id: 'green', name: 'Green', tintColor: '#1B800F', backgroundColor: '#1B800F' },
@@ -44,9 +69,109 @@ const CreateCardScreen2 = () => {
     { id: 'purple', name: 'Purple', tintColor: '#6B46C1', backgroundColor: '#6B46C1' },
   ];
 
+  // Calculate total fee based on selected wallet
+  const totalFee = useMemo(() => {
+    if (selectedWallet === 'naira') {
+      // Card fee in NGN + processing fee
+      const cardFeeInNgn = CARD_CREATION_FEE_USD * EXCHANGE_RATE;
+      return {
+        currency: 'NGN',
+        amount: cardFeeInNgn + PROCESSING_FEE_NGN,
+        cardFee: cardFeeInNgn,
+        processingFee: PROCESSING_FEE_NGN,
+      };
+    } else {
+      // Crypto wallet: fee in USD
+      return {
+        currency: 'USD',
+        amount: CARD_CREATION_FEE_USD,
+        cardFee: CARD_CREATION_FEE_USD,
+        processingFee: 0,
+      };
+    }
+  }, [selectedWallet]);
+
+  // Check if user has sufficient balance
+  const hasSufficientBalance = useMemo(() => {
+    if (selectedWallet === 'naira') {
+      return nairaBalance >= totalFee.amount;
+    } else {
+      return cryptoBalanceUsd >= totalFee.amount;
+    }
+  }, [selectedWallet, nairaBalance, cryptoBalanceUsd, totalFee]);
+
   const handleProceed = () => {
-    if (cardName && selectedColor) {
-      setShowSummary(true);
+    if (!cardName.trim()) {
+      Alert.alert('Validation Error', 'Please enter a card name');
+      return;
+    }
+
+    if (!selectedColor) {
+      Alert.alert('Validation Error', 'Please select a card color');
+      return;
+    }
+
+    if (!hasSufficientBalance) {
+      const currency = selectedWallet === 'naira' ? 'NGN' : 'USD';
+      const balance = selectedWallet === 'naira' ? nairaBalance : cryptoBalanceUsd;
+      Alert.alert(
+        'Insufficient Balance',
+        `You need ${totalFee.amount.toLocaleString()} ${currency} to create a card. Your current balance is ${balance.toLocaleString()} ${currency}.`
+      );
+      return;
+    }
+
+    // Check if billing details are filled
+    if (!billingCountry.trim() || !billingState.trim() || !billingCity.trim() || !billingStreet.trim() || !billingPostalCode.trim()) {
+      setShowBillingModal(true);
+      return;
+    }
+
+    setShowSummary(true);
+  };
+
+  const handleCreateCard = async () => {
+    try {
+      const requestData = {
+        card_name: cardName.trim(),
+        card_color: selectedColor?.id as 'green' | 'brown' | 'purple',
+        payment_wallet_type: selectedWallet === 'naira' ? 'naira_wallet' : 'crypto_wallet',
+        payment_wallet_currency: selectedWallet === 'naira' ? 'NGN' : undefined,
+        billing_address_street: billingStreet.trim(),
+        billing_address_city: billingCity.trim(),
+        billing_address_state: billingState.trim(),
+        billing_address_country: billingCountry.trim(),
+        billing_address_postal_code: billingPostalCode.trim(),
+      };
+
+      console.log('🔵 Create Card - Request Data:', JSON.stringify(requestData, null, 2));
+
+      const result = await createCardMutation.mutateAsync(requestData);
+
+      console.log('🟢 Create Card - API Response:', JSON.stringify(result, null, 2));
+
+      if (result.success) {
+        setShowSummary(false);
+        setShowSuccess(true);
+      } else {
+        Alert.alert('Card Creation Failed', result.message || 'Failed to create card. Please try again.');
+      }
+    } catch (error: any) {
+      console.log('❌ Create Card - Error:', JSON.stringify(error, null, 2));
+      
+      if (error?.response?.status === 400) {
+        Alert.alert('Card Creation Failed', error.response.data?.message || 'Insufficient balance or invalid request.');
+      } else if (error?.response?.status === 422) {
+        const errorMessages = error.response.data?.errors 
+          ? Object.values(error.response.data.errors).flat().join('\n')
+          : error.response.data?.message || 'Validation error';
+        Alert.alert('Validation Error', errorMessages);
+      } else {
+        Alert.alert(
+          'Card Creation Failed',
+          error?.message || error?.response?.data?.message || 'An error occurred. Please try again.'
+        );
+      }
     }
   };
 
@@ -189,7 +314,9 @@ const CreateCardScreen2 = () => {
               </View>
               <View style={styles.walletTextContainer}>
                 <ThemedText style={styles.walletTitle}>Naira Wallet</ThemedText>
-                <ThemedText style={styles.walletSubtitle}>Bal : N20,000</ThemedText>
+                <ThemedText style={styles.walletSubtitle}>
+                  {isLoadingWallet ? 'Loading...' : `Bal : N${Number(nairaBalance).toLocaleString()}`}
+                </ThemedText>
               </View>
               <View
                 style={[
@@ -218,7 +345,9 @@ const CreateCardScreen2 = () => {
               </View>
               <View style={styles.walletTextContainer}>
                 <ThemedText style={styles.walletTitle}>Crypto Wallet</ThemedText>
-                <ThemedText style={styles.walletSubtitle}>Bal : $20,000</ThemedText>
+                <ThemedText style={styles.walletSubtitle}>
+                  {isLoadingWallet ? 'Loading...' : `Bal : $${Number(cryptoBalanceUsd).toLocaleString()}`}
+                </ThemedText>
               </View>
               <View
                 style={[
@@ -240,7 +369,7 @@ const CreateCardScreen2 = () => {
               style={styles.infoIcon}
               resizeMode="contain"
             />
-            <ThemedText style={styles.infoText}>Exchange Rate :$1,500 = N1</ThemedText>
+            <ThemedText style={styles.infoText}>Exchange Rate : $1 = N{EXCHANGE_RATE.toLocaleString()}</ThemedText>
           </View>
           <View style={styles.infoRow}>
             <Image
@@ -248,21 +377,66 @@ const CreateCardScreen2 = () => {
               style={styles.infoIcon}
               resizeMode="contain"
             />
-            <ThemedText style={styles.infoText}>Fee :$3 = N5,500</ThemedText>
+            <ThemedText style={styles.infoText}>
+              Fee : {selectedWallet === 'naira' 
+                ? `N${totalFee.amount.toLocaleString()} ($${CARD_CREATION_FEE_USD} + N${PROCESSING_FEE_NGN})`
+                : `$${totalFee.amount.toLocaleString()}`
+              }
+            </ThemedText>
           </View>
+          {!hasSufficientBalance && (
+            <View style={styles.warningRow}>
+              <Ionicons name="warning" size={16} color="#F59E0B" />
+              <ThemedText style={styles.warningText}>
+                Insufficient balance. You need {totalFee.amount.toLocaleString()} {totalFee.currency}
+              </ThemedText>
+            </View>
+          )}
+        </View>
+
+        {/* Billing Address Section */}
+        <View style={styles.billingSection}>
+          <View style={styles.billingSectionHeader}>
+            <ThemedText style={styles.billingSectionTitle}>Billing Address</ThemedText>
+            <TouchableOpacity
+              onPress={() => setShowBillingModal(true)}
+              activeOpacity={0.8}
+            >
+              <ThemedText style={styles.editBillingText}>
+                {billingCountry && billingState && billingCity && billingStreet && billingPostalCode ? 'Edit' : 'Add'}
+              </ThemedText>
+            </TouchableOpacity>
+          </View>
+          {billingCountry && billingState && billingCity && billingStreet && billingPostalCode ? (
+            <View style={styles.billingPreview}>
+              <ThemedText style={styles.billingPreviewText}>
+                {billingStreet}, {billingCity}, {billingState}, {billingCountry} - {billingPostalCode}
+              </ThemedText>
+            </View>
+          ) : (
+            <View style={styles.billingPlaceholder}>
+              <ThemedText style={styles.billingPlaceholderText}>
+                Tap to add billing address
+              </ThemedText>
+            </View>
+          )}
         </View>
 
         {/* Proceed Button */}
         <TouchableOpacity
           style={[
             styles.proceedButton,
-            (!cardName || !selectedColor) && styles.proceedButtonDisabled,
+            (!cardName.trim() || !selectedColor || !hasSufficientBalance || isLoadingWallet) && styles.proceedButtonDisabled,
           ]}
           onPress={handleProceed}
           activeOpacity={0.8}
-          disabled={!cardName || !selectedColor}
+          disabled={!cardName.trim() || !selectedColor || !hasSufficientBalance || isLoadingWallet}
         >
-          <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+          {isLoadingWallet ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+          )}
         </TouchableOpacity>
       </ScrollView>
 
@@ -328,7 +502,18 @@ const CreateCardScreen2 = () => {
                 </View>
                 <View style={styles.detailRow}>
                   <ThemedText style={styles.detailLabel}>Card fee</ThemedText>
-                  <ThemedText style={styles.detailValue}>$3</ThemedText>
+                  <ThemedText style={styles.detailValue}>
+                    {selectedWallet === 'naira' 
+                      ? `N${totalFee.amount.toLocaleString()}` 
+                      : `$${totalFee.amount.toLocaleString()}`
+                    }
+                  </ThemedText>
+                </View>
+                <View style={styles.detailRow}>
+                  <ThemedText style={styles.detailLabel}>Payment Wallet</ThemedText>
+                  <ThemedText style={styles.detailValue}>
+                    {selectedWallet === 'naira' ? 'Naira Wallet' : 'Crypto Wallet'}
+                  </ThemedText>
                 </View>
                 <View style={styles.detailRow}>
                   <ThemedText style={styles.detailLabel}>Card Color</ThemedText>
@@ -344,44 +529,50 @@ const CreateCardScreen2 = () => {
               </View>
 
               {/* Nigeria Billing Address */}
-                <ThemedText style={styles.detailsSectionTitle}>Nigeria Billing Address</ThemedText>
+                <ThemedText style={styles.detailsSectionTitle}>Billing Address</ThemedText>
               <View style={styles.detailsSection}>
                 <View style={styles.detailRow}>
                   <ThemedText style={styles.detailLabel}>Country</ThemedText>
-                  <ThemedText style={styles.detailValue}>Nigeria</ThemedText>
+                  <ThemedText style={styles.detailValue}>{billingCountry || 'N/A'}</ThemedText>
                 </View>
                 <View style={styles.detailRow}>
                   <ThemedText style={styles.detailLabel}>State</ThemedText>
-                  <ThemedText style={styles.detailValue}>Lagos</ThemedText>
+                  <ThemedText style={styles.detailValue}>{billingState || 'N/A'}</ThemedText>
                 </View>
                 <View style={styles.detailRow}>
                   <ThemedText style={styles.detailLabel}>City</ThemedText>
-                  <ThemedText style={styles.detailValue}>Ikeja</ThemedText>
+                  <ThemedText style={styles.detailValue}>{billingCity || 'N/A'}</ThemedText>
                 </View>
                 <View style={styles.detailRow}>
                   <ThemedText style={styles.detailLabel}>Street</ThemedText>
-                  <ThemedText style={styles.detailValue}>No 1, abscdfertghts street</ThemedText>
+                  <ThemedText style={styles.detailValue}>{billingStreet || 'N/A'}</ThemedText>
                 </View>
                 <View style={styles.detailRow}>
                   <ThemedText style={styles.detailLabel}>Postal code</ThemedText>
-                  <ThemedText style={styles.detailValue}>123456</ThemedText>
+                  <ThemedText style={styles.detailValue}>{billingPostalCode || 'N/A'}</ThemedText>
                 </View>
               </View>
 
               {/* Action Buttons */}
               <View style={styles.summaryButtons}>
                 <TouchableOpacity
-                  style={styles.proceedSummaryButton}
-                  onPress={() => {
-                    setShowSummary(false);
-                    setShowSuccess(true);
-                  }}
+                  style={[
+                    styles.proceedSummaryButton,
+                    createCardMutation.isPending && styles.proceedSummaryButtonDisabled,
+                  ]}
+                  onPress={handleCreateCard}
+                  disabled={createCardMutation.isPending}
                 >
-                  <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                  {createCardMutation.isPending ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.cancelButton}
                   onPress={() => setShowSummary(false)}
+                  disabled={createCardMutation.isPending}
                 >
                   <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
                 </TouchableOpacity>
@@ -389,6 +580,110 @@ const CreateCardScreen2 = () => {
               </View>
             </ScrollView>
           </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Billing Address Modal */}
+      <Modal
+        visible={showBillingModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowBillingModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowBillingModal(false)}
+        >
+          <View style={styles.billingModalContent}>
+            <View style={styles.billingModalHeader}>
+              <ThemedText style={styles.billingModalTitle}>Billing Address</ThemedText>
+              <TouchableOpacity
+                style={styles.billingModalCloseButton}
+                onPress={() => setShowBillingModal(false)}
+              >
+                <Ionicons name="close" size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              style={styles.billingModalScroll}
+              contentContainerStyle={styles.billingModalScrollContent}
+              nestedScrollEnabled={true}
+            >
+              <View style={styles.billingInputContainer}>
+                <ThemedText style={styles.billingInputLabel}>Country</ThemedText>
+                <TextInput
+                  style={styles.billingInput}
+                  placeholder="Enter country (e.g., Nigeria)"
+                  placeholderTextColor="#9CA3AF"
+                  value={billingCountry}
+                  onChangeText={setBillingCountry}
+                />
+              </View>
+
+              <View style={styles.billingInputContainer}>
+                <ThemedText style={styles.billingInputLabel}>State</ThemedText>
+                <TextInput
+                  style={styles.billingInput}
+                  placeholder="Enter state"
+                  placeholderTextColor="#9CA3AF"
+                  value={billingState}
+                  onChangeText={setBillingState}
+                />
+              </View>
+
+              <View style={styles.billingInputContainer}>
+                <ThemedText style={styles.billingInputLabel}>City</ThemedText>
+                <TextInput
+                  style={styles.billingInput}
+                  placeholder="Enter city"
+                  placeholderTextColor="#9CA3AF"
+                  value={billingCity}
+                  onChangeText={setBillingCity}
+                />
+              </View>
+
+              <View style={styles.billingInputContainer}>
+                <ThemedText style={styles.billingInputLabel}>Street Address</ThemedText>
+                <TextInput
+                  style={[styles.billingInput, styles.billingInputMultiline]}
+                  placeholder="Enter street address"
+                  placeholderTextColor="#9CA3AF"
+                  value={billingStreet}
+                  onChangeText={setBillingStreet}
+                  multiline
+                  numberOfLines={3}
+                />
+              </View>
+
+              <View style={styles.billingInputContainer}>
+                <ThemedText style={styles.billingInputLabel}>Postal Code</ThemedText>
+                <TextInput
+                  style={styles.billingInput}
+                  placeholder="Enter postal code"
+                  placeholderTextColor="#9CA3AF"
+                  value={billingPostalCode}
+                  onChangeText={setBillingPostalCode}
+                  keyboardType="numeric"
+                />
+              </View>
+
+              <TouchableOpacity
+                style={styles.saveBillingButton}
+                onPress={() => {
+                  if (!billingCountry.trim() || !billingState.trim() || !billingCity.trim() || !billingStreet.trim() || !billingPostalCode.trim()) {
+                    Alert.alert('Validation Error', 'Please fill in all billing address fields');
+                    return;
+                  }
+                  setShowBillingModal(false);
+                }}
+                activeOpacity={0.8}
+              >
+                <ThemedText style={styles.saveBillingButtonText}>Save</ThemedText>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
         </Pressable>
       </Modal>
 
@@ -426,7 +721,8 @@ const CreateCardScreen2 = () => {
                 style={styles.viewCardButton}
                 onPress={() => {
                   setShowSuccess(false);
-                  navigation.goBack();
+                  // Navigate back to VirtualCardsScreen (which should show the new card)
+                  navigation.navigate('Main');
                 }}
               >
                 <ThemedText style={styles.viewCardButtonText}>View Card</ThemedText>
@@ -648,6 +944,20 @@ const styles = StyleSheet.create({
     color: '#111827',
     marginLeft: 8,
   },
+  warningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  warningText: {
+    fontSize: 12,
+    color: '#F59E0B',
+    marginLeft: 8,
+    flex: 1,
+  },
   proceedButton: {
     backgroundColor: '#42AC36',
     borderRadius: 100,
@@ -659,6 +969,122 @@ const styles = StyleSheet.create({
     backgroundColor: '#D1D5DB',
   },
   proceedButtonText: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: '#FFFFFF',
+  },
+  // Billing Address Section
+  billingSection: {
+    marginBottom: 20,
+  },
+  billingSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  billingSectionTitle: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: '#111827',
+  },
+  editBillingText: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: '#42AC36',
+  },
+  billingPreview: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    padding: 16,
+  },
+  billingPreviewText: {
+    fontSize: 14,
+    color: '#111827',
+    lineHeight: 20,
+  },
+  billingPlaceholder: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderStyle: 'dashed',
+  },
+  billingPlaceholderText: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    textAlign: 'center',
+  },
+  // Billing Modal
+  billingModalContent: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 20,
+    paddingBottom: 40,
+    height: '85%',
+    width: '100%',
+  },
+  billingModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 20,
+    position: 'relative',
+  },
+  billingModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000000',
+    textAlign: 'center',
+  },
+  billingModalCloseButton: {
+    position: 'absolute',
+    right: 20,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+  },
+  billingModalScroll: {
+    flex: 1,
+  },
+  billingModalScrollContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    paddingTop: 0,
+  },
+  billingInputContainer: {
+    marginBottom: 20,
+  },
+  billingInputLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  billingInput: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#111827',
+    minHeight: 48,
+  },
+  billingInputMultiline: {
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  saveBillingButton: {
+    backgroundColor: '#42AC36',
+    borderRadius: 100,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  saveBillingButtonText: {
     fontSize: 14,
     fontWeight: '400',
     color: '#FFFFFF',
@@ -897,6 +1323,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '400',
     color: '#FFFFFF',
+  },
+  proceedSummaryButtonDisabled: {
+    opacity: 0.6,
   },
   cancelButton: {
     flex: 1,

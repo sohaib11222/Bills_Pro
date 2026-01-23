@@ -9,13 +9,17 @@ import {
     Image,
     Modal,
     Pressable,
+    Alert,
+    ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../../components/ThemedText';
+import { useSetPin } from '../../../mutations/authMutations';
 
 const { width, height } = Dimensions.get('window');
 
@@ -25,6 +29,7 @@ const TransactionPinScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
     const [pin, setPin] = useState('');
     const [showSuccessModal, setShowSuccessModal] = useState(false);
+    const setPinMutation = useSetPin();
 
     const handleNumberPress = (num: string) => {
         if (pin.length < 4) {
@@ -36,9 +41,92 @@ const TransactionPinScreen = () => {
         setPin(pin.slice(0, -1));
     };
 
-    const handleNext = () => {
-        if (pin.length === 4) {
-            setShowSuccessModal(true);
+    const handleBiometric = async () => {
+        // Validate that PIN is entered
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a complete 4-digit PIN first');
+            return;
+        }
+
+        try {
+            // Check if biometric hardware is available
+            const compatible = await LocalAuthentication.hasHardwareAsync();
+            if (!compatible) {
+                Alert.alert(
+                    'Biometric Not Available',
+                    'Biometric authentication is not available on this device. Please use the Next button instead.'
+                );
+                return;
+            }
+
+            // Check if biometrics are enrolled
+            const enrolled = await LocalAuthentication.isEnrolledAsync();
+            if (!enrolled) {
+                Alert.alert(
+                    'Biometric Not Set Up',
+                    'Please set up biometric authentication (fingerprint or face ID) in your device settings first.'
+                );
+                return;
+            }
+
+            // Authenticate using biometrics
+            const result = await LocalAuthentication.authenticateAsync({
+                promptMessage: 'Authenticate to set transaction PIN',
+                cancelLabel: 'Cancel',
+                disableDeviceFallback: false,
+            });
+
+            if (result.success) {
+                // Biometric authentication successful, proceed with PIN setup
+                await handleNext();
+            } else {
+                // User cancelled or authentication failed
+                if (result.error !== 'user_cancel') {
+                    Alert.alert('Authentication Failed', 'Biometric authentication failed. Please try again.');
+                }
+            }
+        } catch (error: any) {
+            console.error('Biometric authentication error:', error);
+            Alert.alert('Error', 'An error occurred during biometric authentication. Please try again.');
+        }
+    };
+
+    const handleNext = async () => {
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a complete 4-digit PIN');
+            return;
+        }
+
+        try {
+            console.log('🔵 Transaction PIN Setup - Request Data:', { pin: '****' });
+            const result = await setPinMutation.mutateAsync({
+                pin: pin,
+                pin_confirmation: pin, // Use same PIN for confirmation
+            });
+
+            console.log('🟢 Transaction PIN Setup - API Response:', JSON.stringify(result, null, 2));
+
+            if (result.success) {
+                console.log('✅ Transaction PIN Setup - Success');
+                setShowSuccessModal(true);
+            } else {
+                Alert.alert('PIN Setup Failed', result.message || 'Failed to set transaction PIN. Please try again.');
+                setPin('');
+            }
+        } catch (error: any) {
+            console.log('❌ Transaction PIN Setup - Error:', JSON.stringify(error, null, 2));
+            
+            // Handle validation errors from backend
+            if (error?.data?.errors) {
+                const errorMessages = Object.values(error.data.errors).flat().join('\n');
+                Alert.alert('PIN Setup Failed', errorMessages);
+            } else {
+                Alert.alert(
+                    'PIN Setup Failed',
+                    error?.message || error?.data?.message || 'Failed to set transaction PIN. Please try again.'
+                );
+            }
+            setPin('');
         }
     };
 
@@ -140,10 +228,15 @@ const TransactionPinScreen = () => {
                         <View style={styles.numpadRow}>
                             <TouchableOpacity
                                 style={styles.numButton}
-                                onPress={() => {}}
+                                onPress={handleBiometric}
                                 activeOpacity={0.7}
+                                disabled={pin.length !== 4 || setPinMutation.isPending}
                             >
-                                <Ionicons name="finger-print" size={24} color="#42AC36" />
+                                <Ionicons 
+                                    name="finger-print" 
+                                    size={24} 
+                                    color={pin.length === 4 && !setPinMutation.isPending ? "#42AC36" : "#9CA3AF"} 
+                                />
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.numButton}
@@ -166,13 +259,17 @@ const TransactionPinScreen = () => {
                         <TouchableOpacity
                             style={[
                                 styles.nextButton,
-                                pin.length !== 4 && styles.nextButtonDisabled,
+                                (pin.length !== 4 || setPinMutation.isPending) && styles.nextButtonDisabled,
                             ]}
                             onPress={handleNext}
-                            disabled={pin.length !== 4}
+                            disabled={pin.length !== 4 || setPinMutation.isPending}
                             activeOpacity={0.8}
                         >
-                            <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                            {setPinMutation.isPending ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                                <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                            )}
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -252,26 +349,26 @@ const styles = StyleSheet.create({
     },
     content: {
         flex: 1,
-        paddingTop: 40,
+        paddingTop: 30,
     },
     iconContainer: {
         alignItems: 'center',
-        marginBottom: 40,
+        marginBottom: 30,
     },
     securityIcon: {
-        width: 139,
-        height: 139,
+        width: 120,
+        height: 120,
         tintColor: '#1B800F',
     },
     pinContainer: {
         flexDirection: 'row',
         justifyContent: 'center',
         alignItems: 'center',
-        marginBottom: 40,
+        marginBottom: 30,
     },
     pinDot: {
-        width: 70,
-        height: 60,
+        width: 60,
+        height: 55,
         borderRadius: 15,
         backgroundColor: '#EFEFEF',
         marginHorizontal: 5,
@@ -284,51 +381,51 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        height: 316,
+        height: 280,
         flexDirection: 'row',
         paddingHorizontal: 10,
-        paddingTop: 23,
+        paddingTop: 20,
     },
     numpadLeft: {
         flex: 1,
-        maxWidth: 290,
+        maxWidth: 280,
     },
     numpadRight: {
-        width: 90,
-        marginLeft: 15,
+        width: 85,
+        marginLeft: 10,
         justifyContent: 'flex-start',
         alignItems: 'center',
     },
     numpadRow: {
         flexDirection: 'row',
-        marginBottom: 10,
+        marginBottom: 8,
     },
     numButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
+        marginRight: 8,
     },
     numButtonText: {
-        fontSize: 30,
+        fontSize: 28,
         fontWeight: '400',
         color: '#000000',
     },
     backspaceButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
+        marginRight: 8,
     },
     nextButton: {
-        width: 90,
-        height: 200,
+        width: 85,
+        height: 150,
         backgroundColor: '#42AC36',
         borderRadius: 100,
         justifyContent: 'center',

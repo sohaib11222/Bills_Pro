@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     StyleSheet,
@@ -10,53 +10,34 @@ import {
     Dimensions,
     Modal,
     Pressable,
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useBillPaymentProviders, useBillPaymentPlans, useBillPaymentBeneficiaries } from '../../queries/billPaymentQueries';
+import { useInitiateBillPayment, useConfirmBillPayment, useCreateBeneficiary, useDeleteBeneficiary } from '../../mutations/billPaymentMutations';
+import { useFiatWallets } from '../../queries/walletQueries';
 
 const { width, height } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-const billers = [
-    { id: 'DStv', name: 'Dstv' },
-    { id: 'GoTV', name: 'Gotv' },
-    { id: 'Showmax', name: 'Showmax' },
-];
-
-const plans = {
-    DStv: [
-        { id: '1', name: 'Dstv Yanga', price: '5,000' },
-        { id: '2', name: 'Dstv Confam', price: '10,000' },
-        { id: '3', name: 'Dstv Compact', price: '18,000' },
-        { id: '4', name: 'Dstv Compact Plus', price: '20,000' },
-        { id: '5', name: 'Dstv Premium', price: '40,000' },
-    ],
-    GoTV: [
-        { id: '1', name: 'GoTV Smallie', price: '2,500' },
-        { id: '2', name: 'GoTV Jolli', price: '3,500' },
-        { id: '3', name: 'GoTV Jinja', price: '4,500' },
-        { id: '4', name: 'GoTV Max', price: '5,500' },
-    ],
-    Showmax: [
-        { id: '1', name: 'Showmax Mobile', price: '1,200' },
-        { id: '2', name: 'Showmax Pro', price: '2,900' },
-    ],
-};
-
-const quickAmounts = ['2,000', '5,000', '10,000', '202,000'];
+const CATEGORY_CODE = 'cable_tv';
 
 const CableTVScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
-    const [amount, setAmount] = useState('');
-    const [selectedBiller, setSelectedBiller] = useState<string | null>(null);
-    const [selectedPlan, setSelectedPlan] = useState<{ id: string; name: string; price: string } | null>(null);
     const [decoderNumber, setDecoderNumber] = useState('');
-    const [selectedQuickAmount, setSelectedQuickAmount] = useState<string | null>(null);
+    const [selectedProviderId, setSelectedProviderId] = useState<number | null>(null);
+    const [selectedProviderName, setSelectedProviderName] = useState<string | null>(null);
+    const [selectedPlan, setSelectedPlan] = useState<{ id: number; name: string; amount: number; data_amount?: string; validity_days?: number } | null>(null);
     const [showBillerModal, setShowBillerModal] = useState(false);
     const [showPlanModal, setShowPlanModal] = useState(false);
     const [billerSearchQuery, setBillerSearchQuery] = useState('');
@@ -65,11 +46,38 @@ const CableTVScreen = () => {
     const [showSecurityModal, setShowSecurityModal] = useState(false);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [pin, setPin] = useState('');
+    const [transactionId, setTransactionId] = useState<number | null>(null);
+    const [transactionReference, setTransactionReference] = useState<string | null>(null);
+    const [fee, setFee] = useState<number>(0);
+    const [totalAmount, setTotalAmount] = useState<number>(0);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [showSaveBeneficiaryModal, setShowSaveBeneficiaryModal] = useState(false);
+    const [showManageBeneficiariesModal, setShowManageBeneficiariesModal] = useState(false);
+    const [beneficiaryName, setBeneficiaryName] = useState('');
 
-    const handleQuickAmount = (amt: string) => {
-        setSelectedQuickAmount(amt);
-        setAmount(amt.replace(/,/g, ''));
-    };
+    // API Hooks
+    const { data: providersData, isLoading: providersLoading } = useBillPaymentProviders(CATEGORY_CODE, 'NG');
+    const { data: plansData, isLoading: plansLoading } = useBillPaymentPlans(selectedProviderId || 0);
+    const { data: beneficiariesData, isLoading: beneficiariesLoading } = useBillPaymentBeneficiaries();
+    const { data: walletsData, isLoading: walletsLoading } = useFiatWallets();
+    const initiateMutation = useInitiateBillPayment();
+    const confirmMutation = useConfirmBillPayment();
+    const createBeneficiaryMutation = useCreateBeneficiary();
+    const deleteBeneficiaryMutation = useDeleteBeneficiary();
+
+    const providers = providersData?.data || [];
+    const plans = plansData?.data || [];
+    const beneficiaries = beneficiariesData?.data || [];
+    const fiatWallets = walletsData?.data || [];
+    const ngnWallet = fiatWallets.find((w: any) => w.currency === 'NGN');
+    const balance = ngnWallet?.balance || 0;
+
+    // Reset plan when provider changes
+    useEffect(() => {
+        if (selectedProviderId) {
+            setSelectedPlan(null);
+        }
+    }, [selectedProviderId]);
 
     const handleNumberPress = (num: string) => {
         if (pin.length < 4) {
@@ -81,69 +89,288 @@ const CableTVScreen = () => {
         setPin(pin.slice(0, -1));
     };
 
-    const handleProceed = () => {
-        if (selectedBiller && selectedPlan && decoderNumber && amount) {
-            setShowSummaryModal(true);
+    // Handle initiate payment
+    const handleProceed = async () => {
+        if (!selectedProviderId || !decoderNumber || !selectedPlan) {
+            Alert.alert('Error', 'Please select provider, plan, and enter decoder number');
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const result = await initiateMutation.mutateAsync({
+                categoryCode: CATEGORY_CODE,
+                providerId: selectedProviderId,
+                planId: selectedPlan.id,
+                accountNumber: decoderNumber,
+                currency: 'NGN',
+            });
+
+            if (result.success && result.data) {
+                setTransactionId(result.data.transactionId);
+                setTransactionReference(result.data.reference);
+                setFee(result.data.fee || 0);
+                setTotalAmount(result.data.totalAmount || selectedPlan.amount);
+                setShowSummaryModal(true);
+            } else {
+                Alert.alert('Error', result.message || 'Failed to initiate payment');
+            }
+        } catch (error: any) {
+            console.error('Cable TV initiate error:', error);
+            Alert.alert(
+                'Error',
+                error?.response?.data?.message || error?.message || 'Failed to initiate payment. Please try again.'
+            );
+        } finally {
+            setIsProcessing(false);
         }
     };
 
     const handleSummaryProceed = () => {
         setShowSummaryModal(false);
         setShowSecurityModal(true);
+        setPin(''); // Reset PIN
     };
 
-    const handleSecurityNext = () => {
-        if (pin.length === 4) {
-            setShowSecurityModal(false);
-            setShowSuccessModal(true);
+    // Handle confirm payment
+    // Handle biometric authentication for security
+    const handleSecurityBiometric = async () => {
+        // Validate that PIN is entered
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a 4-digit PIN first');
+            return;
         }
+
+        if (!transactionId) {
+            Alert.alert('Error', 'Transaction ID is missing');
+            return;
+        }
+
+        try {
+            // Check if biometric hardware is available
+            const compatible = await LocalAuthentication.hasHardwareAsync();
+            if (!compatible) {
+                Alert.alert(
+                    'Biometric Not Available',
+                    'Biometric authentication is not available on this device. Please use the Next button instead.'
+                );
+                return;
+            }
+
+            // Check if biometrics are enrolled
+            const enrolled = await LocalAuthentication.isEnrolledAsync();
+            if (!enrolled) {
+                Alert.alert(
+                    'Biometric Not Set Up',
+                    'Please set up biometric authentication (fingerprint or face ID) in your device settings first.'
+                );
+                return;
+            }
+
+            // Authenticate using biometrics
+            const result = await LocalAuthentication.authenticateAsync({
+                promptMessage: 'Authenticate to confirm payment',
+                cancelLabel: 'Cancel',
+                disableDeviceFallback: false,
+            });
+
+            if (result.success) {
+                // Biometric authentication successful, proceed with security next
+                await handleSecurityNext();
+            } else {
+                // User cancelled or authentication failed
+                if (result.error === 'user_cancel') {
+                    // User cancelled, don't show error
+                    return;
+                } else {
+                    Alert.alert('Authentication Failed', 'Biometric authentication failed. Please try again.');
+                }
+            }
+        } catch (error: any) {
+            console.error('Biometric authentication error:', error);
+            Alert.alert('Error', 'An error occurred during biometric authentication. Please try again.');
+        }
+    };
+
+    const handleSecurityNext = async () => {
+        if (pin.length !== 4) {
+            Alert.alert('Error', 'Please enter a 4-digit PIN');
+            return;
+        }
+
+        if (!transactionId) {
+            Alert.alert('Error', 'Transaction ID is missing');
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const result = await confirmMutation.mutateAsync({
+                transactionId: transactionId,
+                pin: pin,
+            });
+
+            if (result.success && result.data) {
+                setShowSecurityModal(false);
+                setShowSuccessModal(true);
+            } else {
+                Alert.alert('Error', result.message || 'Payment confirmation failed');
+                setPin(''); // Reset PIN on error
+            }
+        } catch (error: any) {
+            console.error('Cable TV confirm error:', error);
+            const errorMessage = error?.response?.data?.message || error?.message || 'Payment confirmation failed. Please try again.';
+            Alert.alert('Error', errorMessage);
+            setPin(''); // Reset PIN on error
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // Check if beneficiary already exists
+    const beneficiaryExists = beneficiaries.some((b: any) => 
+        b.provider_id === selectedProviderId && 
+        b.account_number === decoderNumber &&
+        b.category?.code === CATEGORY_CODE
+    );
+
+    // Handle save beneficiary
+    const handleSaveBeneficiary = async () => {
+        if (!selectedProviderId || !decoderNumber) {
+            Alert.alert('Error', 'Missing provider or decoder number');
+            return;
+        }
+
+        if (beneficiaryExists) {
+            Alert.alert('Info', 'This beneficiary already exists');
+            setShowSaveBeneficiaryModal(false);
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const result = await createBeneficiaryMutation.mutateAsync({
+                categoryCode: CATEGORY_CODE,
+                providerId: selectedProviderId,
+                accountNumber: decoderNumber,
+                name: beneficiaryName || undefined,
+            });
+
+            if (result.success) {
+                Alert.alert('Success', 'Beneficiary saved successfully');
+                setShowSaveBeneficiaryModal(false);
+                setBeneficiaryName('');
+            } else {
+                Alert.alert('Error', result.message || 'Failed to save beneficiary');
+            }
+        } catch (error: any) {
+            console.error('Save beneficiary error:', error);
+            Alert.alert(
+                'Error',
+                error?.response?.data?.message || error?.message || 'Failed to save beneficiary. Please try again.'
+            );
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // Handle delete beneficiary
+    const handleDeleteBeneficiary = async (beneficiaryId: number) => {
+        Alert.alert(
+            'Delete Beneficiary',
+            'Are you sure you want to delete this beneficiary?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setIsProcessing(true);
+                        try {
+                            const result = await deleteBeneficiaryMutation.mutateAsync(beneficiaryId);
+                            if (result.success) {
+                                Alert.alert('Success', 'Beneficiary deleted successfully');
+                            } else {
+                                Alert.alert('Error', result.message || 'Failed to delete beneficiary');
+                            }
+                        } catch (error: any) {
+                            console.error('Delete beneficiary error:', error);
+                            Alert.alert(
+                                'Error',
+                                error?.response?.data?.message || error?.message || 'Failed to delete beneficiary. Please try again.'
+                            );
+                        } finally {
+                            setIsProcessing(false);
+                        }
+                    },
+                },
+            ]
+        );
     };
 
     const handleSuccessTransaction = () => {
         setShowSuccessModal(false);
+        // Reset form
+        setDecoderNumber('');
+        setSelectedProviderId(null);
+        setSelectedProviderName(null);
+        setSelectedPlan(null);
+        setPin('');
+        setTransactionId(null);
+        setTransactionReference(null);
+        setFee(0);
+        setTotalAmount(0);
+        setBeneficiaryName('');
+        
         navigation.navigate('TransactionHistory', {
             type: 'bill_payment',
             transactionData: {
                 type: 'Cable TV',
-                billerType: selectedBiller,
+                billerType: selectedProviderName,
                 decoderNumber: decoderNumber,
                 planType: selectedPlan?.name || '',
-                accountName: 'Qamardeen Abdulmalik',
-                amount: selectedPlan?.price || amount,
-                fee: '200',
-                totalAmount: (parseFloat((selectedPlan?.price || amount).replace(/,/g, '')) + 200).toString(),
+                accountName: '',
+                amount: selectedPlan?.amount?.toString() || '0',
+                fee: fee.toString(),
+                totalAmount: totalAmount.toString(),
                 date: new Date().toLocaleString(),
                 status: 'Successful',
-                transactionId: '2348hf8283hfc92eni',
+                transactionId: transactionReference,
             },
         });
     };
 
-    const formatAmount = (amt: string) => {
+    const formatAmount = (amt: string | number) => {
         if (!amt) return '';
-        const num = parseFloat(amt.replace(/,/g, ''));
-        if (isNaN(num)) return amt;
+        const num = typeof amt === 'string' ? parseFloat(amt.replace(/,/g, '')) : amt;
+        if (isNaN(num)) return amt.toString();
         return num.toLocaleString('en-US');
     };
 
-    const filteredBillers = billers.filter(biller => {
-        if (billerSearchQuery && !biller.name.toLowerCase().includes(billerSearchQuery.toLowerCase())) return false;
+    // Filter providers
+    const filteredBillers = providers.filter((biller: any) => {
+        if (billerSearchQuery && !biller.name?.toLowerCase().includes(billerSearchQuery.toLowerCase())) return false;
         return true;
     });
 
-    const availablePlans = selectedBiller ? (plans as any)[selectedBiller] || [] : [];
-    const filteredPlans = availablePlans.filter((plan: { name: string }) => {
-        if (planSearchQuery && !plan.name.toLowerCase().includes(planSearchQuery.toLowerCase())) return false;
+    // Filter plans based on search
+    const filteredPlans = plans.filter((plan: any) => {
+        if (planSearchQuery && !plan.name?.toLowerCase().includes(planSearchQuery.toLowerCase())) return false;
         return true;
     });
 
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView 
+            style={styles.container}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
             <StatusBar style="dark" />
 
             <ScrollView
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
             >
                 {/* Header */}
                 <View style={styles.header}>
@@ -168,40 +395,77 @@ const CableTVScreen = () => {
                     <ThemedText style={styles.balanceLabel}>My Balance</ThemedText>
                     <View style={styles.balanceRow}>
                         <ThemedText style={styles.balanceCurrency}>₦</ThemedText>
-                        <ThemedText style={styles.balanceAmount}>10,000.00</ThemedText>
+                        {walletsLoading ? (
+                            <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                            <ThemedText style={styles.balanceAmount}>
+                                {balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </ThemedText>
+                        )}
                     </View>
                 </ImageBackground>
+
+                {/* Recent Section */}
+                <View style={styles.recentSection}>
+                    <View style={styles.recentSectionHeader}>
+                        <ThemedText style={styles.sectionTitle}>Recent</ThemedText>
+                        <TouchableOpacity
+                            onPress={() => setShowManageBeneficiariesModal(true)}
+                            activeOpacity={0.8}
+                        >
+                            <ThemedText style={styles.manageButtonText}>Manage</ThemedText>
+                        </TouchableOpacity>
+                    </View>
+                    {beneficiariesLoading ? (
+                        <View style={styles.loadingContainer}>
+                            <ActivityIndicator size="small" color="#42AC36" />
+                        </View>
+                    ) : beneficiaries.filter((b: any) => b.category?.code === CATEGORY_CODE).length > 0 ? (
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.recentScrollContent}
+                        >
+                            {beneficiaries
+                                .filter((b: any) => b.category?.code === CATEGORY_CODE)
+                                .slice(0, 5)
+                                .map((beneficiary: any) => {
+                                    const provider = providers.find((p: any) => p.id === beneficiary.provider_id);
+                                    return (
+                                        <TouchableOpacity
+                                            key={beneficiary.id}
+                                            style={styles.recentCard}
+                                            onPress={() => {
+                                                setDecoderNumber(beneficiary.account_number || '');
+                                                setSelectedProviderId(beneficiary.provider_id);
+                                                setSelectedProviderName(provider?.name || beneficiary.provider?.name || '');
+                                            }}
+                                            activeOpacity={0.8}
+                                        >
+                                            <View style={[styles.recentLogoContainer, { backgroundColor: '#FFD700' }]}>
+                                                <Ionicons name="tv-outline" size={24} color="#FFA500" />
+                                            </View>
+                                            <ThemedText style={styles.recentPhoneNumber}>
+                                                {beneficiary.account_number || ''}
+                                            </ThemedText>
+                                            <ThemedText style={styles.recentNetworkName}>
+                                                {beneficiary.name || provider?.name || beneficiary.provider?.name || ''}
+                                            </ThemedText>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                        </ScrollView>
+                    ) : (
+                        <View style={styles.emptyBeneficiariesContainer}>
+                            <ThemedText style={styles.emptyBeneficiariesText}>No saved beneficiaries</ThemedText>
+                            <ThemedText style={styles.emptyBeneficiariesSubtext}>Save beneficiaries for faster payments</ThemedText>
+                        </View>
+                    )}
+                </View>
 
                 {/* Details Section */}
                 <View style={styles.detailsSection}>
                     <ThemedText style={styles.sectionTitle}>Details</ThemedText>
-
-                    {/* Choose Amount Section */}
-                    <View style={styles.amountSection}>
-                        {/* <ThemedText style={styles.subsectionTitle}>Choose an amount</ThemedText> */}
-                        <View style={styles.quickAmountRow}>
-                            {quickAmounts.map((amt) => (
-                                <TouchableOpacity
-                                    key={amt}
-                                    style={[
-                                        styles.quickAmountButton,
-                                        selectedQuickAmount === amt && styles.quickAmountButtonActive,
-                                    ]}
-                                    onPress={() => handleQuickAmount(amt)}
-                                    activeOpacity={0.8}
-                                >
-                                    <ThemedText
-                                        style={[
-                                            styles.quickAmountText,
-                                            selectedQuickAmount === amt && styles.quickAmountTextActive,
-                                        ]}
-                                    >
-                                        {amt}
-                                    </ThemedText>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-                    </View>
 
                     {/* Biller Type Input */}
                     <TouchableOpacity
@@ -209,8 +473,8 @@ const CableTVScreen = () => {
                         onPress={() => setShowBillerModal(true)}
                         activeOpacity={0.8}
                     >
-                        <ThemedText style={[styles.input, !selectedBiller && styles.inputPlaceholder]}>
-                            {selectedBiller || 'Biller type'}
+                        <ThemedText style={[styles.input, !selectedProviderName && styles.inputPlaceholder]}>
+                            {selectedProviderName || 'Biller type'}
                         </ThemedText>
                         <Ionicons name="chevron-down" size={20} color="#9CA3AF" />
                     </TouchableOpacity>
@@ -219,21 +483,23 @@ const CableTVScreen = () => {
                     <TouchableOpacity
                         style={[styles.inputContainer, {padding:20}]}
                         onPress={() => {
-                            if (selectedBiller) {
+                            if (selectedProviderId) {
                                 setShowPlanModal(true);
+                            } else {
+                                Alert.alert('Info', 'Please select a biller first');
                             }
                         }}
                         activeOpacity={0.8}
-                        disabled={!selectedBiller}
+                        disabled={!selectedProviderId}
                     >
                         <ThemedText style={[styles.input, !selectedPlan && styles.inputPlaceholder]}>
-                            {selectedPlan ? selectedPlan.name : 'Select Plan'}
+                            {selectedPlan ? `${selectedPlan.name} - N${formatAmount(selectedPlan.amount)}` : 'Select Plan'}
                         </ThemedText>
                         <Ionicons name="chevron-down" size={20} color="#9CA3AF" />
                     </TouchableOpacity>
 
                     {/* Decoder Number Input */}
-                    <View style={styles.inputContainer}>
+                    <View style={[styles.inputContainer, { marginBottom: 100 }]}>
                         <TextInput
                             style={styles.input}
                             placeholder="Decoder number"
@@ -241,18 +507,6 @@ const CableTVScreen = () => {
                             value={decoderNumber}
                             onChangeText={setDecoderNumber}
                             keyboardType="default"
-                        />
-                    </View>
-
-                    {/* Amount Input */}
-                    <View style={[styles.inputContainer, { marginBottom: 100 }]}>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Amount"
-                            placeholderTextColor="#9CA3AF"
-                            value={formatAmount(amount)}
-                            onChangeText={(text) => setAmount(text.replace(/,/g, ''))}
-                            keyboardType="numeric"
                         />
                     </View>
                 </View>
@@ -263,13 +517,17 @@ const CableTVScreen = () => {
                 <TouchableOpacity
                     style={[
                         styles.proceedButton,
-                        (!selectedBiller || !selectedPlan || !decoderNumber || !amount) && styles.proceedButtonDisabled,
+                        (!selectedProviderId || !selectedPlan || !decoderNumber || isProcessing) && styles.proceedButtonDisabled,
                     ]}
                     onPress={handleProceed}
-                    disabled={!selectedBiller || !selectedPlan || !decoderNumber || !amount}
+                    disabled={!selectedProviderId || !selectedPlan || !decoderNumber || isProcessing}
                     activeOpacity={0.8}
                 >
-                    <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    {isProcessing ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                    ) : (
+                        <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+                    )}
                 </TouchableOpacity>
             </View>
 
@@ -314,20 +572,26 @@ const CableTVScreen = () => {
                             contentContainerStyle={styles.billersListContent}
                             nestedScrollEnabled={true}
                         >
-                            {filteredBillers.length > 0 ? (
-                                filteredBillers.map((biller) => (
+                            {providersLoading ? (
+                                <View style={styles.noBillersContainer}>
+                                    <ActivityIndicator size="small" color="#42AC36" />
+                                    <ThemedText style={styles.noBillersText}>Loading billers...</ThemedText>
+                                </View>
+                            ) : filteredBillers.length > 0 ? (
+                                filteredBillers.map((biller: any) => (
                                     <TouchableOpacity
                                         key={biller.id}
                                         style={styles.billerItem}
                                         onPress={() => {
-                                            setSelectedBiller(biller.id);
+                                            setSelectedProviderId(biller.id);
+                                            setSelectedProviderName(biller.name);
                                             setSelectedPlan(null); // Reset plan when biller changes
                                         }}
                                         activeOpacity={0.8}
                                     >
                                         <ThemedText style={styles.billerItemText}>{biller.name}</ThemedText>
                                         <View style={styles.radioButton}>
-                                            {selectedBiller === biller.id && <View style={styles.radioButtonInner} />}
+                                            {selectedProviderId === biller.id && <View style={styles.radioButtonInner} />}
                                         </View>
                                     </TouchableOpacity>
                                 ))
@@ -343,14 +607,14 @@ const CableTVScreen = () => {
                             <TouchableOpacity
                                 style={[
                                     styles.applyButton,
-                                    !selectedBiller && styles.applyButtonDisabled,
+                                    !selectedProviderId && styles.applyButtonDisabled,
                                 ]}
                                 onPress={() => {
-                                    if (selectedBiller) {
+                                    if (selectedProviderId) {
                                         setShowBillerModal(false);
                                     }
                                 }}
-                                disabled={!selectedBiller}
+                                disabled={!selectedProviderId}
                                 activeOpacity={0.8}
                             >
                                 <ThemedText style={styles.applyButtonText}>Apply</ThemedText>
@@ -373,7 +637,7 @@ const CableTVScreen = () => {
                 >
                     <Pressable style={styles.planModalContent} onPress={(e) => e.stopPropagation()}>
                         <View style={styles.planModalHeader}>
-                            <ThemedText style={styles.planModalTitle}>Select Plan for {selectedBiller}</ThemedText>
+                            <ThemedText style={styles.planModalTitle}>Select Plan for {selectedProviderName || 'Provider'}</ThemedText>
                             <TouchableOpacity
                                 style={styles.planModalCloseButton}
                                 onPress={() => setShowPlanModal(false)}
@@ -401,15 +665,43 @@ const CableTVScreen = () => {
                             contentContainerStyle={styles.plansListContent}
                             nestedScrollEnabled={true}
                         >
-                            {filteredPlans.length > 0 ? (
-                                filteredPlans.map((plan: { id: string; name: string; price: string }) => (
+                            {plansLoading ? (
+                                <View style={styles.noPlansContainer}>
+                                    <ActivityIndicator size="small" color="#42AC36" />
+                                    <ThemedText style={styles.noPlansText}>Loading plans...</ThemedText>
+                                </View>
+                            ) : filteredPlans.length > 0 ? (
+                                filteredPlans.map((plan: any) => (
                                     <TouchableOpacity
                                         key={plan.id}
                                         style={styles.planItem}
-                                        onPress={() => setSelectedPlan(plan)}
+                                        onPress={() => setSelectedPlan({
+                                            id: plan.id,
+                                            name: plan.name,
+                                            amount: plan.amount,
+                                            data_amount: plan.data_amount,
+                                            validity_days: plan.validity_days,
+                                        })}
                                         activeOpacity={0.8}
                                     >
-                                        <ThemedText style={styles.planItemText}>{plan.name} - N{plan.price}</ThemedText>
+                                        <View style={styles.planItemContent}>
+                                            <ThemedText style={styles.planItemText}>
+                                                {plan.name}
+                                            </ThemedText>
+                                            {plan.data_amount && (
+                                                <ThemedText style={styles.planItemData}>
+                                                    {plan.data_amount}
+                                                </ThemedText>
+                                            )}
+                                            {plan.validity_days && (
+                                                <ThemedText style={styles.planItemValidity}>
+                                                    Valid for {plan.validity_days} day{plan.validity_days > 1 ? 's' : ''}
+                                                </ThemedText>
+                                            )}
+                                            <ThemedText style={styles.planItemPrice}>
+                                                N{formatAmount(plan.amount)}
+                                            </ThemedText>
+                                        </View>
                                         <View style={styles.radioButton}>
                                             {selectedPlan?.id === plan.id && <View style={styles.radioButtonInner} />}
                                         </View>
@@ -478,7 +770,7 @@ const CableTVScreen = () => {
                             <ThemedText style={styles.pendingText}>Pending</ThemedText>
                             <ThemedText style={styles.pendingDescription}>
                                 You are about to make a Cable TV recharge of{' '}
-                                <ThemedText style={styles.pendingAmount}>N{selectedPlan?.price || formatAmount(amount)}</ThemedText>
+                                <ThemedText style={styles.pendingAmount}>N{selectedPlan ? formatAmount(selectedPlan.amount) : '0'}</ThemedText>
                             </ThemedText>
                         </View>
 
@@ -486,21 +778,21 @@ const CableTVScreen = () => {
                         <View style={styles.summaryDetails}>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Amount:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>N{selectedPlan?.price || formatAmount(amount)}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>N{selectedPlan ? formatAmount(selectedPlan.amount) : '0'}</ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Fee:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>N200</ThemedText>
+                                <ThemedText style={styles.summaryValue}>N{formatAmount(fee.toString())}</ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Total Amount:</ThemedText>
                                 <ThemedText style={styles.summaryValue}>
-                                    N{formatAmount((parseFloat((selectedPlan?.price || amount).replace(/,/g, '')) + 200).toString())}
+                                    N{formatAmount(totalAmount.toString())}
                                 </ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Biller Name:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>{selectedBiller}</ThemedText>
+                                <ThemedText style={styles.summaryValue}>{selectedProviderName || 'N/A'}</ThemedText>
                             </View>
                             <View style={styles.summaryRow}>
                                 <ThemedText style={styles.summaryLabel}>Decoder Number:</ThemedText>
@@ -510,20 +802,24 @@ const CableTVScreen = () => {
                                 <ThemedText style={styles.summaryLabel}>Plan name:</ThemedText>
                                 <ThemedText style={styles.summaryValue}>{selectedPlan?.name || ''}</ThemedText>
                             </View>
-                            <View style={styles.summaryRow}>
-                                <ThemedText style={styles.summaryLabel}>Account name:</ThemedText>
-                                <ThemedText style={styles.summaryValue}>Qamardeen Abdulmalik</ThemedText>
-                            </View>
                         </View>
 
                         {/* Action Buttons */}
                         <View style={styles.summaryButtons}>
                             <TouchableOpacity
-                                style={styles.proceedSummaryButton}
+                                style={[
+                                    styles.proceedSummaryButton,
+                                    isProcessing && styles.proceedSummaryButtonDisabled,
+                                ]}
                                 onPress={handleSummaryProceed}
+                                disabled={isProcessing}
                                 activeOpacity={0.8}
                             >
-                                <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                {isProcessing ? (
+                                    <ActivityIndicator color="#FFFFFF" size="small" />
+                                ) : (
+                                    <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                                )}
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.cancelButton}
@@ -637,7 +933,7 @@ const CableTVScreen = () => {
                                 <View style={styles.numpadRow}>
                                     <TouchableOpacity
                                         style={styles.numButton}
-                                        onPress={() => {}}
+                                        onPress={handleSecurityBiometric}
                                         activeOpacity={0.7}
                                     >
                                         <Ionicons name="finger-print" size={24} color="#42AC36" />
@@ -663,13 +959,17 @@ const CableTVScreen = () => {
                                 <TouchableOpacity
                                     style={[
                                         styles.nextButton,
-                                        pin.length !== 4 && styles.nextButtonDisabled,
+                                        (pin.length !== 4 || isProcessing) && styles.nextButtonDisabled,
                                     ]}
                                     onPress={handleSecurityNext}
-                                    disabled={pin.length !== 4}
+                                    disabled={pin.length !== 4 || isProcessing}
                                     activeOpacity={0.8}
                                 >
-                                    <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                                    {isProcessing ? (
+                                        <ActivityIndicator color="#FFFFFF" size="small" />
+                                    ) : (
+                                        <ThemedText style={styles.nextButtonText}>Next</ThemedText>
+                                    )}
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -705,8 +1005,21 @@ const CableTVScreen = () => {
                         <ThemedText style={styles.successTitle}>Success</ThemedText>
                         <ThemedText style={styles.successMessage}>
                             You have successfully completed a Cable TV recharge of{' '}
-                            <ThemedText style={styles.successAmount}>N{selectedPlan?.price || formatAmount(amount)}</ThemedText>
+                            <ThemedText style={styles.successAmount}>N{selectedPlan ? formatAmount(selectedPlan.amount) : '0'}</ThemedText>
                         </ThemedText>
+                        {!beneficiaryExists && selectedProviderId && decoderNumber && (
+                            <TouchableOpacity
+                                style={styles.saveBeneficiaryButton}
+                                onPress={() => {
+                                    setShowSuccessModal(false);
+                                    setShowSaveBeneficiaryModal(true);
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="bookmark-outline" size={16} color="#42AC36" />
+                                <ThemedText style={styles.saveBeneficiaryButtonText}>Save as Beneficiary</ThemedText>
+                            </TouchableOpacity>
+                        )}
                         <View style={styles.successButtons}>
                             <TouchableOpacity
                                 style={styles.transactionButton}
@@ -726,7 +1039,160 @@ const CableTVScreen = () => {
                     </Pressable>
                 </Pressable>
             </Modal>
-        </View>
+
+            {/* Save Beneficiary Modal */}
+            <Modal
+                visible={showSaveBeneficiaryModal}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setShowSaveBeneficiaryModal(false)}
+            >
+                <Pressable
+                    style={styles.beneficiaryModalOverlay}
+                    onPress={() => setShowSaveBeneficiaryModal(false)}
+                >
+                    <Pressable style={styles.beneficiaryModalContent} onPress={(e) => e.stopPropagation()}>
+                        <View style={styles.beneficiaryModalHeader}>
+                            <ThemedText style={styles.beneficiaryModalTitle}>Save as Beneficiary</ThemedText>
+                            <TouchableOpacity
+                                style={styles.beneficiaryModalCloseButton}
+                                onPress={() => {
+                                    setShowSaveBeneficiaryModal(false);
+                                    setBeneficiaryName('');
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="close" size={24} color="#000000" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.beneficiaryForm}>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Decoder Number</ThemedText>
+                                <ThemedText style={styles.beneficiaryValue}>{decoderNumber}</ThemedText>
+                            </View>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Biller</ThemedText>
+                                <ThemedText style={styles.beneficiaryValue}>{selectedProviderName}</ThemedText>
+                            </View>
+                            <View style={styles.beneficiaryInputContainer}>
+                                <ThemedText style={styles.beneficiaryLabel}>Name (Optional)</ThemedText>
+                                <TextInput
+                                    style={styles.beneficiaryNameInput}
+                                    placeholder="e.g., Home TV, Living Room"
+                                    placeholderTextColor="#9CA3AF"
+                                    value={beneficiaryName}
+                                    onChangeText={setBeneficiaryName}
+                                />
+                            </View>
+                        </View>
+
+                        <View style={styles.beneficiaryModalButtons}>
+                            <TouchableOpacity
+                                style={[
+                                    styles.saveBeneficiaryConfirmButton,
+                                    isProcessing && styles.saveBeneficiaryConfirmButtonDisabled,
+                                ]}
+                                onPress={handleSaveBeneficiary}
+                                disabled={isProcessing}
+                                activeOpacity={0.8}
+                            >
+                                {isProcessing ? (
+                                    <ActivityIndicator color="#FFFFFF" size="small" />
+                                ) : (
+                                    <ThemedText style={styles.saveBeneficiaryConfirmButtonText}>Save</ThemedText>
+                                )}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.cancelBeneficiaryButton}
+                                onPress={() => {
+                                    setShowSaveBeneficiaryModal(false);
+                                    setBeneficiaryName('');
+                                }}
+                                activeOpacity={0.8}
+                            >
+                                <ThemedText style={styles.cancelBeneficiaryButtonText}>Cancel</ThemedText>
+                            </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* Manage Beneficiaries Modal */}
+            <Modal
+                visible={showManageBeneficiariesModal}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setShowManageBeneficiariesModal(false)}
+            >
+                <Pressable
+                    style={styles.beneficiaryModalOverlay}
+                    onPress={() => setShowManageBeneficiariesModal(false)}
+                >
+                    <Pressable style={styles.beneficiaryModalContent} onPress={(e) => e.stopPropagation()}>
+                        <View style={styles.beneficiaryModalHeader}>
+                            <ThemedText style={styles.beneficiaryModalTitle}>Manage Beneficiaries</ThemedText>
+                            <TouchableOpacity
+                                style={styles.beneficiaryModalCloseButton}
+                                onPress={() => setShowManageBeneficiariesModal(false)}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="close" size={24} color="#000000" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView
+                            style={styles.beneficiariesList}
+                            showsVerticalScrollIndicator={false}
+                            contentContainerStyle={styles.beneficiariesListContent}
+                        >
+                            {beneficiariesLoading ? (
+                                <View style={styles.beneficiariesLoadingContainer}>
+                                    <ActivityIndicator size="small" color="#42AC36" />
+                                    <ThemedText style={styles.beneficiariesLoadingText}>Loading...</ThemedText>
+                                </View>
+                            ) : beneficiaries.filter((b: any) => b.category?.code === CATEGORY_CODE).length > 0 ? (
+                                beneficiaries
+                                    .filter((b: any) => b.category?.code === CATEGORY_CODE)
+                                    .map((beneficiary: any) => {
+                                        const provider = providers.find((p: any) => p.id === beneficiary.provider_id);
+                                        return (
+                                            <View key={beneficiary.id} style={styles.beneficiaryListItem}>
+                                                <View style={styles.beneficiaryListItemContent}>
+                                                    <ThemedText style={styles.beneficiaryListItemName}>
+                                                        {beneficiary.name || 'Unnamed'}
+                                                    </ThemedText>
+                                                    <ThemedText style={styles.beneficiaryListItemNumber}>
+                                                        {beneficiary.account_number}
+                                                    </ThemedText>
+                                                    <ThemedText style={styles.beneficiaryListItemProvider}>
+                                                        {provider?.name || beneficiary.provider?.name || ''}
+                                                    </ThemedText>
+                                                </View>
+                                                <TouchableOpacity
+                                                    style={styles.deleteBeneficiaryButton}
+                                                    onPress={() => handleDeleteBeneficiary(beneficiary.id)}
+                                                    disabled={isProcessing}
+                                                    activeOpacity={0.8}
+                                                >
+                                                    <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                                                </TouchableOpacity>
+                                            </View>
+                                        );
+                                    })
+                            ) : (
+                                <View style={styles.emptyBeneficiariesModalContainer}>
+                                    <ThemedText style={styles.emptyBeneficiariesModalText}>No beneficiaries saved</ThemedText>
+                                    <ThemedText style={styles.emptyBeneficiariesModalSubtext}>
+                                        Save beneficiaries after successful payments for faster checkout
+                                    </ThemedText>
+                                </View>
+                            )}
+                        </ScrollView>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+        </KeyboardAvoidingView>
     );
 };
 
@@ -737,7 +1203,7 @@ const styles = StyleSheet.create({
     },
     scrollContent: {
         paddingHorizontal: 20,
-        paddingBottom: 20,
+        paddingBottom: 100,
     },
     header: {
         paddingTop: 50,
@@ -790,7 +1256,7 @@ const styles = StyleSheet.create({
         marginRight: 8,
     },
     balanceAmount: {
-        fontSize: 50,
+        fontSize: 25,
         fontWeight: '700',
         color: '#FFFFFF',
     },
@@ -1313,45 +1779,45 @@ const styles = StyleSheet.create({
     },
     numpadLeft: {
         flex: 1,
-        maxWidth: 290,
+        maxWidth: 280,
         marginLeft: 10,
     },
     numpadRow: {
         flexDirection: 'row',
-        marginBottom: 10,
+        marginBottom: 8,
     },
     numButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
+        marginRight: 8,
     },
     numButtonText: {
-        fontSize: 30,
+        fontSize: 28,
         fontWeight: '400',
         color: '#000000',
     },
     backspaceButton: {
-        width: 90,
-        height: 60,
+        width: 85,
+        height: 58,
         backgroundColor: '#EFEFEF',
         borderRadius: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
+        marginRight: 8,
     },
     numpadRight: {
-        width: 90,
-        marginLeft: 15,
+        width: 85,
+        marginLeft: 10,
         justifyContent: 'flex-start',
         alignItems: 'center',
     },
     nextButton: {
-        width: 90,
-        height: 200,
+        width: 85,
+        height: 150,
         backgroundColor: '#42AC36',
         borderRadius: 100,
         justifyContent: 'center',
@@ -1462,6 +1928,264 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '400',
         color: '#6B7280',
+    },
+    saveBeneficiaryButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#F0FDF4',
+        borderWidth: 1,
+        borderColor: '#42AC36',
+        borderRadius: 12,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        marginBottom: 16,
+        gap: 8,
+    },
+    saveBeneficiaryButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#42AC36',
+    },
+    recentSection: {
+        marginBottom: 24,
+    },
+    recentSectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    manageButtonText: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#42AC36',
+    },
+    recentScrollContent: {
+        gap: 12,
+    },
+    recentCard: {
+        width: 85,
+        backgroundColor: '#EFEFEF',
+        borderRadius: 15,
+        padding: 12,
+        alignItems: 'center',
+        marginRight: 12,
+    },
+    recentLogoContainer: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    recentPhoneNumber: {
+        fontSize: 8,
+        fontWeight: '400',
+        color: '#111827',
+        marginBottom: 4,
+    },
+    recentNetworkName: {
+        fontSize: 8,
+        fontWeight: '400',
+        color: '#6B7280',
+    },
+    emptyBeneficiariesContainer: {
+        padding: 20,
+        alignItems: 'center',
+    },
+    emptyBeneficiariesText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#6B7280',
+        marginBottom: 4,
+    },
+    emptyBeneficiariesSubtext: {
+        fontSize: 12,
+        color: '#9CA3AF',
+    },
+    beneficiaryModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'flex-end',
+    },
+    beneficiaryModalContent: {
+        backgroundColor: '#FFFFFF',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        paddingTop: 20,
+        paddingBottom: 32,
+        paddingHorizontal: 20,
+        maxHeight: height * 0.9,
+        width: '100%',
+    },
+    beneficiaryModalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 20,
+        position: 'relative',
+    },
+    beneficiaryModalTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#000000',
+        textAlign: 'center',
+    },
+    beneficiaryModalCloseButton: {
+        position: 'absolute',
+        right: 0,
+        top: 0,
+        bottom: 0,
+        justifyContent: 'center',
+    },
+    beneficiaryForm: {
+        marginBottom: 24,
+    },
+    beneficiaryInputContainer: {
+        marginBottom: 16,
+    },
+    beneficiaryLabel: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#6B7280',
+        marginBottom: 8,
+    },
+    beneficiaryValue: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#111827',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        padding: 12,
+    },
+    beneficiaryNameInput: {
+        fontSize: 14,
+        fontWeight: '400',
+        color: '#111827',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    beneficiaryModalButtons: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    saveBeneficiaryConfirmButton: {
+        flex: 1,
+        backgroundColor: '#42AC36',
+        borderRadius: 12,
+        paddingVertical: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    saveBeneficiaryConfirmButtonDisabled: {
+        opacity: 0.6,
+    },
+    saveBeneficiaryConfirmButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#FFFFFF',
+    },
+    cancelBeneficiaryButton: {
+        flex: 1,
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        paddingVertical: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    cancelBeneficiaryButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#6B7280',
+    },
+    beneficiariesList: {
+        maxHeight: 400,
+    },
+    beneficiariesListContent: {
+        paddingBottom: 10,
+    },
+    beneficiariesLoadingContainer: {
+        padding: 40,
+        alignItems: 'center',
+        gap: 12,
+    },
+    beneficiariesLoadingText: {
+        fontSize: 14,
+        color: '#6B7280',
+    },
+    beneficiaryListItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 15,
+        padding: 16,
+        marginBottom: 12,
+    },
+    beneficiaryListItemContent: {
+        flex: 1,
+    },
+    beneficiaryListItemName: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#111827',
+        marginBottom: 4,
+    },
+    beneficiaryListItemNumber: {
+        fontSize: 12,
+        fontWeight: '400',
+        color: '#6B7280',
+        marginBottom: 2,
+    },
+    beneficiaryListItemProvider: {
+        fontSize: 11,
+        fontWeight: '400',
+        color: '#9CA3AF',
+    },
+    deleteBeneficiaryButton: {
+        padding: 8,
+    },
+    emptyBeneficiariesModalContainer: {
+        padding: 40,
+        alignItems: 'center',
+    },
+    emptyBeneficiariesModalText: {
+        fontSize: 16,
+        fontWeight: '500',
+        color: '#6B7280',
+        marginBottom: 8,
+    },
+    emptyBeneficiariesModalSubtext: {
+        fontSize: 14,
+        color: '#9CA3AF',
+        textAlign: 'center',
+    },
+    proceedSummaryButtonDisabled: {
+        opacity: 0.6,
+    },
+    planItemContent: {
+        flex: 1,
+    },
+    planItemData: {
+        fontSize: 12,
+        color: '#42AC36',
+        marginTop: 4,
+    },
+    planItemValidity: {
+        fontSize: 10,
+        color: '#6B7280',
+        marginTop: 2,
+    },
+    planItemPrice: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#111827',
+        marginTop: 4,
     },
 });
 

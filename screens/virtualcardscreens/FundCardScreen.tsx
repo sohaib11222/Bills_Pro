@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -10,41 +10,174 @@ import {
   TextInput,
   Modal,
   Pressable,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import ThemedText from '../../components/ThemedText';
+import { useVirtualCardDetails } from '../../queries/virtualCardQueries';
+import { useFundVirtualCard } from '../../mutations/virtualCardMutations';
+import { useWalletBalance } from '../../queries/walletQueries';
 
 const { width } = Dimensions.get('window');
 
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type FundCardRouteProp = RouteProp<RootStackParamList, 'FundCard'>;
+
+const EXCHANGE_RATE = 1500; // $1 = N1,500
+const FUNDING_FEE_NGN = 500;
 
 const FundCardScreen = () => {
   const navigation = useNavigation<RootNavigationProp>();
-  const [selectedAmount, setSelectedAmount] = useState<string>('10,000');
+  const route = useRoute<FundCardRouteProp>();
+  const cardId = route.params?.cardId;
+
+  const { data: cardData, isLoading: isLoadingCard } = useVirtualCardDetails(cardId ?? 0);
+  const { data: walletData, isLoading: isLoadingWallet } = useWalletBalance();
+  const fundCardMutation = useFundVirtualCard();
+
+  const card = cardData?.data;
+  const nairaBalance = walletData?.data?.fiat?.balance || 0;
+  const cryptoBalanceUsd = walletData?.data?.crypto?.total_usd || 0;
+
+  const [selectedAmount, setSelectedAmount] = useState<string>('');
   const [depositAmount, setDepositAmount] = useState<string>('');
   const [showWalletDropdown, setShowWalletDropdown] = useState(false);
   const [selectedWallet, setSelectedWallet] = useState<'naira' | 'crypto'>('naira');
   const [showSummary, setShowSummary] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [fundingTransactionData, setFundingTransactionData] = useState<any>(null);
 
-  const quickAmounts = ['2,000', '5,000', '10,000', '202,000'];
+  const quickAmounts = ['2,000', '5,000', '10,000', '20,000'];
 
-  const calculateAmountToPay = () => {
-    const amount = parseFloat(depositAmount.replace(/,/g, '')) || 0;
-    const exchangeRate = 1500; // N1,500 = $1
-    const fee = 500;
-    const total = amount * exchangeRate + fee;
-    return total.toLocaleString();
+  // Get card color
+  const getCardColor = (colorId?: string) => {
+    const colorMap: { [key: string]: string } = {
+      green: '#1B800F',
+      brown: '#8B4513',
+      purple: '#6B46C1',
+    };
+    return colorMap[colorId || 'green'] || '#1B800F';
   };
 
+  // Calculate amount to pay based on selected wallet
+  const amountToPay = useMemo(() => {
+    const amountUsd = parseFloat(depositAmount.replace(/,/g, '')) || 0;
+    if (selectedWallet === 'naira') {
+      // Convert USD to NGN + fee
+      const amountInNgn = amountUsd * EXCHANGE_RATE;
+      return amountInNgn + FUNDING_FEE_NGN;
+    } else {
+      // Crypto: just the USD amount (no fee mentioned for crypto)
+      return amountUsd;
+    }
+  }, [depositAmount, selectedWallet]);
+
+  // Check if user has sufficient balance
+  const hasSufficientBalance = useMemo(() => {
+    if (selectedWallet === 'naira') {
+      return nairaBalance >= amountToPay;
+    } else {
+      return cryptoBalanceUsd >= amountToPay;
+    }
+  }, [selectedWallet, nairaBalance, cryptoBalanceUsd, amountToPay]);
+
   const handleProceed = () => {
-    if (depositAmount) {
-      setShowSummary(true);
+    if (!depositAmount.trim()) {
+      Alert.alert('Validation Error', 'Please enter an amount to fund');
+      return;
+    }
+
+    const amountUsd = parseFloat(depositAmount.replace(/,/g, '')) || 0;
+    if (amountUsd <= 0) {
+      Alert.alert('Validation Error', 'Amount must be greater than 0');
+      return;
+    }
+
+    if (!hasSufficientBalance) {
+      const currency = selectedWallet === 'naira' ? 'NGN' : 'USD';
+      const balance = selectedWallet === 'naira' ? nairaBalance : cryptoBalanceUsd;
+      Alert.alert(
+        'Insufficient Balance',
+        `You need ${amountToPay.toLocaleString()} ${currency} to fund this card. Your current balance is ${balance.toLocaleString()} ${currency}.`
+      );
+      return;
+    }
+
+    setShowSummary(true);
+  };
+
+  const handleFundCard = async () => {
+    if (!cardId) {
+      Alert.alert('Error', 'Card ID is missing');
+      return;
+    }
+
+    try {
+      const amountUsd = parseFloat(depositAmount.replace(/,/g, '')) || 0;
+
+      console.log('🔵 Fund Card - Request Data:', {
+        cardId,
+        amount: amountUsd,
+        payment_wallet_type: selectedWallet === 'naira' ? 'naira_wallet' : 'crypto_wallet',
+        payment_wallet_currency: selectedWallet === 'naira' ? 'NGN' : undefined,
+      });
+
+      const result = await fundCardMutation.mutateAsync({
+        id: cardId,
+        data: {
+          amount: amountUsd,
+          payment_wallet_type: selectedWallet === 'naira' ? 'naira_wallet' : 'crypto_wallet',
+          payment_wallet_currency: selectedWallet === 'naira' ? 'NGN' : undefined,
+        },
+      });
+
+      console.log('🟢 Fund Card - API Response:', JSON.stringify(result, null, 2));
+
+      if (result.success) {
+        // Store transaction data from API response
+        const transactionData = result.data || {
+          id: result.data?.id || result.data?.transaction_id,
+          transaction_id: result.data?.transaction_id || result.data?.id,
+          type: 'card_funding',
+          amount: amountUsd,
+          currency: 'USD',
+          status: result.data?.status || 'completed',
+          wallet_type: 'virtual_card',
+          card_id: cardId,
+          payment_wallet_type: selectedWallet === 'naira' ? 'naira_wallet' : 'crypto_wallet',
+          created_at: result.data?.created_at || new Date().toISOString(),
+          ...result.data,
+        };
+        
+        setFundingTransactionData(transactionData);
+        setShowSummary(false);
+        setShowSuccess(true);
+      } else {
+        Alert.alert('Funding Failed', result.message || 'Failed to fund card. Please try again.');
+      }
+    } catch (error: any) {
+      console.log('❌ Fund Card - Error:', JSON.stringify(error, null, 2));
+      
+      if (error?.response?.status === 400) {
+        Alert.alert('Funding Failed', error.response.data?.message || 'Insufficient balance or invalid request.');
+      } else if (error?.response?.status === 422) {
+        const errorMessages = error.response.data?.errors 
+          ? Object.values(error.response.data.errors).flat().join('\n')
+          : error.response.data?.message || 'Validation error';
+        Alert.alert('Validation Error', errorMessages);
+      } else {
+        Alert.alert(
+          'Funding Failed',
+          error?.message || error?.response?.data?.message || 'An error occurred. Please try again.'
+        );
+      }
     }
   };
 
@@ -69,44 +202,76 @@ const FundCardScreen = () => {
         contentContainerStyle={styles.scrollContent}
       >
         {/* Virtual Card */}
-        <ImageBackground
-          source={require('../../assets/card_background.png')}
-          style={styles.cardContainer}
-          imageStyle={styles.cardImage}
-          resizeMode="cover"
-        >
-          <View style={styles.cardTopRow}>
-            <ThemedText style={styles.cardSmallText}>Online Payment Virtual Card</ThemedText>
-            <ThemedText style={styles.cardBrandText}>Bills Pro</ThemedText>
+        {isLoadingCard ? (
+          <View style={[styles.cardContainer, { justifyContent: 'center', alignItems: 'center' }]}>
+            <ActivityIndicator size="large" color="#42AC36" />
           </View>
-
-          <View style={styles.cardAmountRow}>
-            <View style={styles.cardAmountLeft}>
-              <ThemedText style={styles.cardCurrency}>$</ThemedText>
-              <ThemedText style={styles.cardAmount}>10,000.00</ThemedText>
-            </View>
-            <View style={styles.cardEyeCircle}>
-              <Image
-                source={require('../../assets/security-safe.png')}
-                style={styles.eyeIcon}
-                resizeMode="contain"
-              />
-            </View>
-          </View>
-
-          <View style={styles.cardNumberRow}>
-            <ThemedText style={styles.cardMaskedNumber}>**** **** **** 1234</ThemedText>
-          </View>
-
-          <View style={styles.cardBottomRow}>
-            <ThemedText style={styles.cardHolderName}>Qamardeen Abdul Malik</ThemedText>
-            <Image
-              source={require('../../assets/Group 2.png')}
-              style={styles.mastercardLogo}
-              resizeMode="contain"
+        ) : card ? (
+          <ImageBackground
+            source={require('../../assets/card_background.png')}
+            style={styles.cardContainer}
+            imageStyle={styles.cardImage}
+            resizeMode="cover"
+          >
+            {/* Color overlay */}
+            <View
+              style={[
+                StyleSheet.absoluteFill,
+                {
+                  backgroundColor: getCardColor(card.card_color),
+                  opacity: 0.7,
+                  borderRadius: 24,
+                },
+              ]}
             />
+            <View style={styles.cardContent}>
+              <View style={styles.cardTopRow}>
+                <ThemedText style={styles.cardSmallText}>Online Payment Virtual Card</ThemedText>
+                <ThemedText style={styles.cardBrandText}>Bills Pro</ThemedText>
+              </View>
+
+              <View style={styles.cardAmountRow}>
+                <View style={styles.cardAmountLeft}>
+                  <ThemedText style={styles.cardCurrency}>$</ThemedText>
+                  <ThemedText style={styles.cardAmount}>
+                    {Number(card.balance || 0).toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </ThemedText>
+                </View>
+                <View style={styles.cardEyeCircle}>
+                  <Image
+                    source={require('../../assets/security-safe.png')}
+                    style={styles.eyeIcon}
+                    resizeMode="contain"
+                  />
+                </View>
+              </View>
+
+              <View style={styles.cardNumberRow}>
+                <ThemedText style={styles.cardMaskedNumber}>
+                  {`**** **** **** ${String(card.card_number || '').slice(-4)}`}
+                </ThemedText>
+              </View>
+
+              <View style={styles.cardBottomRow}>
+                <ThemedText style={styles.cardHolderName}>
+                  {card.card_name || 'No card'}
+                </ThemedText>
+                <Image
+                  source={require('../../assets/Group 2.png')}
+                  style={styles.mastercardLogo}
+                  resizeMode="contain"
+                />
+              </View>
+            </View>
+          </ImageBackground>
+        ) : (
+          <View style={[styles.cardContainer, { justifyContent: 'center', alignItems: 'center' }]}>
+            <ThemedText>Card not found</ThemedText>
           </View>
-        </ImageBackground>
+        )}
 
         {/* Quick Amount Buttons */}
         <View style={styles.quickAmountRow}>
@@ -190,7 +355,9 @@ const FundCardScreen = () => {
                 </View>
                 <View style={styles.walletTextContainer}>
                   <ThemedText style={styles.walletTitle}>Naira Wallet</ThemedText>
-                  <ThemedText style={styles.walletSubtitle}>Bal : N20,000</ThemedText>
+                  <ThemedText style={styles.walletSubtitle}>
+                    {isLoadingWallet ? 'Loading...' : `Bal : N${Number(nairaBalance).toLocaleString()}`}
+                  </ThemedText>
                 </View>
                 <View
                   style={[
@@ -219,7 +386,9 @@ const FundCardScreen = () => {
                 </View>
                 <View style={styles.walletTextContainer}>
                   <ThemedText style={styles.walletTitle}>Crypto Wallet</ThemedText>
-                  <ThemedText style={styles.walletSubtitle}>Bal : $20,000</ThemedText>
+                  <ThemedText style={styles.walletSubtitle}>
+                    {isLoadingWallet ? 'Loading...' : `Bal : $${Number(cryptoBalanceUsd).toLocaleString()}`}
+                  </ThemedText>
                 </View>
                 <View
                   style={[
@@ -242,7 +411,8 @@ const FundCardScreen = () => {
         >
           <ThemedText style={styles.amountToPayLabel}>Amount to pay</ThemedText>
           <ThemedText style={styles.amountToPayValue}>
-            N{calculateAmountToPay() || '0'}
+            {selectedWallet === 'naira' ? 'N' : '$'}
+            {amountToPay.toLocaleString()}
           </ThemedText>
         </LinearGradient>
 
@@ -254,7 +424,7 @@ const FundCardScreen = () => {
               style={styles.infoIcon}
               resizeMode="contain"
             />
-            <ThemedText style={styles.infoText}>Exchange Rate :$1,500 = N1</ThemedText>
+            <ThemedText style={styles.infoText}>Exchange Rate : $1 = N{EXCHANGE_RATE.toLocaleString()}</ThemedText>
           </View>
           <View style={styles.infoRow}>
             <Image
@@ -262,17 +432,35 @@ const FundCardScreen = () => {
               style={styles.infoIcon}
               resizeMode="contain"
             />
-            <ThemedText style={styles.infoText}>Fee :N500</ThemedText>
+            <ThemedText style={styles.infoText}>
+              Fee : {selectedWallet === 'naira' ? `N${FUNDING_FEE_NGN.toLocaleString()}` : '$0'}
+            </ThemedText>
           </View>
+          {!hasSufficientBalance && depositAmount && (
+            <View style={styles.warningRow}>
+              <Ionicons name="warning" size={16} color="#F59E0B" />
+              <ThemedText style={styles.warningText}>
+                Insufficient balance. You need {amountToPay.toLocaleString()} {selectedWallet === 'naira' ? 'NGN' : 'USD'}
+              </ThemedText>
+            </View>
+          )}
         </View>
 
         {/* Proceed Button */}
         <TouchableOpacity
-          style={styles.proceedButton}
+          style={[
+            styles.proceedButton,
+            (!depositAmount.trim() || !hasSufficientBalance || isLoadingCard || isLoadingWallet) && styles.proceedButtonDisabled,
+          ]}
           onPress={handleProceed}
           activeOpacity={0.8}
+          disabled={!depositAmount.trim() || !hasSufficientBalance || isLoadingCard || isLoadingWallet}
         >
-          <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+          {isLoadingCard || isLoadingWallet ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
+          )}
         </TouchableOpacity>
       </ScrollView>
 
@@ -329,20 +517,26 @@ const FundCardScreen = () => {
               </View>
               <View style={styles.summaryRow}>
                 <ThemedText style={styles.summaryLabel}>Exchange Rate</ThemedText>
-                <ThemedText style={styles.summaryValue}>N1,500 = $1</ThemedText>
+                <ThemedText style={styles.summaryValue}>$1 = N{EXCHANGE_RATE.toLocaleString()}</ThemedText>
               </View>
               <View style={styles.summaryRow}>
                 <ThemedText style={styles.summaryLabel}>Amount to pay</ThemedText>
-                <ThemedText style={styles.summaryValue}>N{calculateAmountToPay() || '0'}</ThemedText>
+                <ThemedText style={styles.summaryValue}>
+                  {selectedWallet === 'naira' ? 'N' : '$'}
+                  {amountToPay.toLocaleString()}
+                </ThemedText>
               </View>
               <View style={styles.summaryRow}>
                 <ThemedText style={styles.summaryLabel}>Fee</ThemedText>
-                <ThemedText style={styles.summaryValue}>N500</ThemedText>
+                <ThemedText style={styles.summaryValue}>
+                  {selectedWallet === 'naira' ? `N${FUNDING_FEE_NGN.toLocaleString()}` : '$0'}
+                </ThemedText>
               </View>
               <View style={styles.summaryRow}>
                 <ThemedText style={styles.summaryLabel}>Total Amount</ThemedText>
                 <ThemedText style={styles.summaryValue}>
-                  N{calculateAmountToPay() || '0'}
+                  {selectedWallet === 'naira' ? 'N' : '$'}
+                  {amountToPay.toLocaleString()}
                 </ThemedText>
               </View>
               <View style={styles.summaryRow}>
@@ -354,17 +548,23 @@ const FundCardScreen = () => {
             {/* Action Buttons */}
             <View style={styles.summaryButtons}>
               <TouchableOpacity
-                style={styles.proceedSummaryButton}
-                onPress={() => {
-                  setShowSummary(false);
-                  setShowSuccess(true);
-                }}
+                style={[
+                  styles.proceedSummaryButton,
+                  fundCardMutation.isPending && styles.proceedSummaryButtonDisabled,
+                ]}
+                onPress={handleFundCard}
+                disabled={fundCardMutation.isPending}
               >
-                <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                {fundCardMutation.isPending ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <ThemedText style={styles.proceedSummaryButtonText}>Proceed</ThemedText>
+                )}
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.cancelButton}
                 onPress={() => setShowSummary(false)}
+                disabled={fundCardMutation.isPending}
               >
                 <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
               </TouchableOpacity>
@@ -378,7 +578,10 @@ const FundCardScreen = () => {
         visible={showSuccess}
         transparent={true}
         animationType="fade"
-        onRequestClose={() => setShowSuccess(false)}
+        onRequestClose={() => {
+          setShowSuccess(false);
+          navigation.goBack();
+        }}
       >
         <Pressable
           style={styles.modalOverlay}
@@ -408,14 +611,41 @@ const FundCardScreen = () => {
                 style={styles.transactionButton}
                 onPress={() => {
                   setShowSuccess(false);
-                  navigation.navigate('TransactionHistory', { type: 'funding' });
+                  // Pass transaction data if available, otherwise just pass type and cardId
+                  if (fundingTransactionData) {
+                    navigation.navigate('TransactionHistory', {
+                      type: 'virtual_card',
+                      transactionData: fundingTransactionData,
+                      cardId,
+                    });
+                  } else {
+                    // Fallback: try to construct transaction data from available info
+                    const fallbackTransactionData = {
+                      type: 'card_funding',
+                      amount: parseFloat(depositAmount.replace(/,/g, '')) || 0,
+                      currency: 'USD',
+                      status: 'completed',
+                      wallet_type: 'virtual_card',
+                      card_id: cardId,
+                      payment_wallet_type: selectedWallet === 'naira' ? 'naira_wallet' : 'crypto_wallet',
+                      created_at: new Date().toISOString(),
+                    };
+                    navigation.navigate('TransactionHistory', {
+                      type: 'virtual_card',
+                      transactionData: fallbackTransactionData,
+                      cardId,
+                    });
+                  }
                 }}
               >
                 <ThemedText style={styles.transactionButtonText}>Transaction</ThemedText>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.closeSuccessButton}
-                onPress={() => setShowSuccess(false)}
+                onPress={() => {
+                  setShowSuccess(false);
+                  navigation.goBack();
+                }}
               >
                 <ThemedText style={styles.closeSuccessButtonText}>Close</ThemedText>
               </TouchableOpacity>
@@ -464,13 +694,17 @@ const styles = StyleSheet.create({
     width: width - 40,
     height: 190,
     borderRadius: 24,
-    paddingHorizontal: 20,
-    paddingVertical: 18,
     overflow: 'hidden',
     marginBottom: 24,
   },
   cardImage: {
     borderRadius: 24,
+  },
+  cardContent: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    zIndex: 1,
   },
   cardTopRow: {
     flexDirection: 'row',
@@ -712,6 +946,23 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     color: '#FFFFFF',
   },
+  proceedButtonDisabled: {
+    backgroundColor: '#D1D5DB',
+  },
+  warningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  warningText: {
+    fontSize: 12,
+    color: '#F59E0B',
+    marginLeft: 8,
+    flex: 1,
+  },
   // Modal Styles
   modalOverlay: {
     flex: 1,
@@ -910,6 +1161,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '400',
     color: '#FFFFFF',
+  },
+  proceedSummaryButtonDisabled: {
+    opacity: 0.6,
   },
   cancelButton: {
     flex: 1,

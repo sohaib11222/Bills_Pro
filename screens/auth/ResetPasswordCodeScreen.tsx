@@ -1,21 +1,28 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import { useVerifyPasswordResetOtp, useResendOtp } from '../../mutations/authMutations';
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList>;
+type ResetPasswordCodeRouteProp = RouteProp<AuthStackParamList, 'ResetPasswordCode'>;
 
 const { width, height } = Dimensions.get('window');
 
 const ResetPasswordCodeScreen = () => {
   const navigation = useNavigation<NavigationProp>();
+  const route = useRoute<ResetPasswordCodeRouteProp>();
+  const email = route.params?.email || '';
   const [code, setCode] = useState(['', '', '', '', '']);
   const [timeLeft, setTimeLeft] = useState(59);
+  const [isResending, setIsResending] = useState(false);
   const inputRefs = useRef<(TextInput | null)[]>([]);
+  const verifyOtpMutation = useVerifyPasswordResetOtp();
+  const resendMutation = useResendOtp();
 
   useEffect(() => {
     if (timeLeft > 0) {
@@ -39,8 +46,89 @@ const ResetPasswordCodeScreen = () => {
     }
   };
 
+  const handleVerifyOtp = async () => {
+    const otp = code.join('');
+    
+    if (otp.length !== 5) {
+      Alert.alert('Error', 'Please enter the complete 5-digit code');
+      return;
+    }
+
+    if (!email) {
+      Alert.alert('Error', 'Email address is required');
+      return;
+    }
+
+    try {
+      console.log('🔵 Verify Password Reset OTP - Request Data:', { email, otp });
+      const result = await verifyOtpMutation.mutateAsync({
+        email: email,
+        otp: otp,
+      });
+
+      console.log('🟢 Verify Password Reset OTP - API Response:', JSON.stringify(result, null, 2));
+
+      if (result.success) {
+        // Navigate to new password screen with email and OTP
+        navigation.navigate('NewPassword', { email: email, otp: otp });
+      } else {
+        Alert.alert('Verification Failed', result.message || 'Invalid OTP. Please try again.');
+        setCode(['', '', '', '', '']);
+        inputRefs.current[0]?.focus();
+      }
+    } catch (error: any) {
+      console.log('❌ Verify Password Reset OTP - Error:', JSON.stringify(error, null, 2));
+      Alert.alert(
+        'Verification Failed',
+        error?.message || error?.data?.message || 'Invalid or expired OTP. Please try again.'
+      );
+      setCode(['', '', '', '', '']);
+      inputRefs.current[0]?.focus();
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (timeLeft > 0) {
+      Alert.alert('Please Wait', `You can resend code in ${timeLeft} seconds`);
+      return;
+    }
+
+    if (!email) {
+      Alert.alert('Error', 'Email address is required');
+      return;
+    }
+
+    setIsResending(true);
+    try {
+      const result = await resendMutation.mutateAsync({
+        email: email,
+        type: 'email',
+      });
+
+      if (result.success) {
+        Alert.alert('Success', 'OTP has been resent to your email');
+        setTimeLeft(59);
+        setCode(['', '', '', '', '']);
+        inputRefs.current[0]?.focus();
+      } else {
+        Alert.alert('Error', result.message || 'Failed to resend OTP. Please try again.');
+      }
+    } catch (error: any) {
+      Alert.alert(
+        'Error',
+        error?.message || error?.data?.message || 'Failed to resend OTP. Please try again.'
+      );
+    } finally {
+      setIsResending(false);
+    }
+  };
+
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
       <StatusBar style="light" />
 
       {/* Background */}
@@ -58,38 +146,75 @@ const ResetPasswordCodeScreen = () => {
 
       {/* White Card */}
       <View style={styles.card}>
-        {/* Title */}
-        <ThemedText style={styles.title}>Reset Password</ThemedText>
-
-        {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>Enter the 5-digit code sent to your email</ThemedText>
-
-        {/* Code Inputs */}
-        <View style={styles.codeContainer}>
-          {code.map((digit, index) => (
-            <TextInput
-              key={index}
-              ref={(ref) => (inputRefs.current[index] = ref)}
-              style={styles.codeInput}
-              value={digit}
-              onChangeText={(text) => handleCodeChange(text.slice(-1), index)}
-              onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, index)}
-              keyboardType="number-pad"
-              maxLength={1}
-              selectTextOnFocus
-            />
-          ))}
-        </View>
-
-        {/* Proceed Button */}
-        <TouchableOpacity
-          style={styles.proceedButton}
-          onPress={() => navigation.navigate('NewPassword')}
+        <ScrollView
+          contentContainerStyle={styles.cardContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
-          <ThemedText style={styles.proceedButtonText}>Proceed</ThemedText>
-        </TouchableOpacity>
+          {/* Title */}
+          <ThemedText style={styles.title}>Reset Password</ThemedText>
+
+          {/* Subtitle */}
+          <ThemedText style={styles.subtitle}>
+            Enter the 5-digit code sent to {email ? email : 'your email'}
+          </ThemedText>
+
+          {/* Code Inputs */}
+          <View style={styles.codeContainer}>
+            {code.map((digit, index) => (
+              <TextInput
+                key={index}
+                ref={(ref) => (inputRefs.current[index] = ref)}
+                style={styles.codeInput}
+                value={digit}
+                onChangeText={(text) => handleCodeChange(text.slice(-1), index)}
+                onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, index)}
+                keyboardType="number-pad"
+                maxLength={1}
+                selectTextOnFocus
+              />
+            ))}
+          </View>
+
+          {/* Resend Timer/Button */}
+          <View style={styles.resendSection}>
+            {timeLeft > 0 ? (
+              <ThemedText style={styles.resendText}>
+                You can resend code in{' '}
+                <ThemedText style={styles.timerText}>00:{String(timeLeft).padStart(2, '0')} sec</ThemedText>
+              </ThemedText>
+            ) : (
+              <TouchableOpacity 
+                onPress={handleResendOtp}
+                disabled={isResending || resendMutation.isPending}
+                style={styles.resendButton}
+              >
+                {isResending || resendMutation.isPending ? (
+                  <ActivityIndicator size="small" color="#42ac36" />
+                ) : (
+                  <ThemedText style={styles.resendButtonText}>Resend Code</ThemedText>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
+        </ScrollView>
+
+        {/* Proceed Button - Fixed at bottom */}
+        <View style={styles.buttonWrapper}>
+          <TouchableOpacity
+            style={[styles.proceedButton, (verifyOtpMutation.isPending || code.join('').length !== 5) && styles.proceedButtonDisabled]}
+            onPress={handleVerifyOtp}
+            disabled={verifyOtpMutation.isPending || code.join('').length !== 5}
+          >
+            {verifyOtpMutation.isPending ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <ThemedText style={styles.proceedButtonText}>Verify</ThemedText>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -129,12 +254,19 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: height * 0.32,
+    maxHeight: height * 0.55,
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
-    paddingTop: 30,
     paddingHorizontal: 20,
+  },
+  cardContent: {
+    paddingTop: 30,
+    paddingBottom: 20,
+  },
+  resendSection: {
+    marginBottom: 20,
+    alignItems: 'center',
   },
   title: {
     fontSize: 30,
@@ -165,11 +297,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#000000',
   },
+  buttonWrapper: {
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    paddingTop: 10,
+  },
   proceedButton: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
+    width: '100%',
     height: 60,
     borderRadius: 100,
     backgroundColor: '#42AC36',
@@ -181,6 +314,29 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 19,
     color: '#FFFFFF',
+  },
+  proceedButtonDisabled: {
+    opacity: 0.6,
+  },
+  resendText: {
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 19,
+    color: '#000000',
+    textAlign: 'center',
+  },
+  timerText: {
+    color: '#42ac36',
+  },
+  resendButton: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  resendButtonText: {
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 19,
+    color: '#42ac36',
   },
 });
 

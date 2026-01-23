@@ -1,12 +1,18 @@
-import React, { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Linking } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Image, StyleSheet, TouchableOpacity, TextInput, Dimensions, Linking, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { Ionicons } from '@expo/vector-icons';
 import type { AuthStackParamList } from '../../navigators/AuthNavigator';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompositeNavigationProp } from '@react-navigation/native';
 import ThemedText from '../../components/ThemedText';
+import { useLogin } from '../../mutations/authMutations';
+import { useAuth } from '../../services/context/AuthContext';
+import { getBiometricEnabled } from '../../services/storage/appStorage';
+import { getLastLoginEmail, getAuthToken } from '../../services/storage/authStorage';
 
 type AuthNavigationProp = NativeStackNavigationProp<AuthStackParamList>;
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -18,9 +24,153 @@ const LoginScreen = () => {
   const navigation = useNavigation<NavigationProp>();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showBiometric, setShowBiometric] = useState(false);
+  const [isCheckingBiometric, setIsCheckingBiometric] = useState(true);
+  const loginMutation = useLogin();
+  const { checkAuth } = useAuth();
+
+  // Check if biometric login is available
+  useEffect(() => {
+    const checkBiometricAvailability = async () => {
+      try {
+        const biometricEnabled = await getBiometricEnabled();
+        const lastEmail = await getLastLoginEmail();
+        const hasToken = await getAuthToken();
+        
+        if (biometricEnabled && lastEmail) {
+          // Check if biometric hardware is available
+          const compatible = await LocalAuthentication.hasHardwareAsync();
+          const enrolled = await LocalAuthentication.isEnrolledAsync();
+          
+          if (compatible && enrolled) {
+            setShowBiometric(true);
+            setEmail(lastEmail);
+          }
+        }
+      } catch (error) {
+        console.error('Error checking biometric availability:', error);
+      } finally {
+        setIsCheckingBiometric(false);
+      }
+    };
+    
+    checkBiometricAvailability();
+  }, []);
+
+  // Handle biometric login
+  const handleBiometricLogin = async () => {
+    if (!email.trim()) {
+      Alert.alert('Error', 'No saved email found. Please login manually.');
+      return;
+    }
+
+    try {
+      // Check if token is still valid
+      const token = await getAuthToken();
+      if (token) {
+        const isAuthenticated = await checkAuth();
+        if (isAuthenticated) {
+          // Token is valid, navigate to main app
+          const parent = navigation.getParent();
+          if (parent) {
+            parent.navigate('Main');
+          } else {
+            navigation.navigate('Main');
+          }
+          return;
+        }
+      }
+
+      // Token invalid or expired, authenticate with biometric then prompt for password
+      const compatible = await LocalAuthentication.hasHardwareAsync();
+      if (!compatible) {
+        Alert.alert('Biometric Not Available', 'Biometric authentication is not available on this device.');
+        return;
+      }
+
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!enrolled) {
+        Alert.alert('Biometric Not Set Up', 'Please set up biometric authentication in your device settings first.');
+        return;
+      }
+
+      // Authenticate using biometrics
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Authenticate to login',
+        cancelLabel: 'Cancel',
+        disableDeviceFallback: false,
+      });
+
+      if (result.success) {
+        // Biometric successful, but still need password for security
+        Alert.alert(
+          'Enter Password',
+          'Please enter your password to complete login.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Focus password input - user will enter password and click login
+                // The email is already filled from stored value
+              },
+            },
+          ]
+        );
+      } else {
+        if (result.error !== 'user_cancel') {
+          Alert.alert('Authentication Failed', 'Biometric authentication failed. Please try again.');
+        }
+      }
+    } catch (error: any) {
+      console.error('Biometric login error:', error);
+      Alert.alert('Error', 'An error occurred during biometric authentication. Please try again.');
+    }
+  };
+
+  const handleLogin = async () => {
+    if (!email.trim()) {
+      Alert.alert('Error', 'Please enter your email address');
+      return;
+    }
+
+    if (!password.trim()) {
+      Alert.alert('Error', 'Please enter your password');
+      return;
+    }
+
+    try {
+      const result = await loginMutation.mutateAsync({
+        email: email.trim(),
+        password,
+      });
+
+      if (result.success) {
+        // Refresh auth state
+        await checkAuth();
+        // Navigate to main app
+        const parent = navigation.getParent();
+        if (parent) {
+          parent.navigate('Main');
+        } else {
+          navigation.navigate('Main');
+        }
+      } else {
+        Alert.alert('Login Failed', result.message || 'Invalid credentials. Please try again.');
+      }
+    } catch (error: any) {
+      Alert.alert(
+        'Login Failed',
+        error?.message || error?.data?.message || 'An error occurred. Please try again.'
+      );
+    }
+  };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
       <StatusBar style="light" />
       
       {/* Background Section */}
@@ -42,78 +192,89 @@ const LoginScreen = () => {
           <ThemedText style={styles.registerButtonText}>Register</ThemedText>
         </TouchableOpacity>
 
-        {/* Title */}
-        <ThemedText weight='semibold' style={styles.title}>Login</ThemedText>
-        
-        {/* Subtitle */}
-        <ThemedText style={styles.subtitle}>Login to your account</ThemedText>
+        <ScrollView
+          contentContainerStyle={styles.cardContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Title */}
+          <ThemedText weight='semibold' style={styles.title}>Login</ThemedText>
+          
+          {/* Subtitle */}
+          <ThemedText style={styles.subtitle}>Login to your account</ThemedText>
 
-        {/* Form */}
-        <View style={styles.formContainer}>
-          {/* Email Input */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Email Address"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
+          {/* Form */}
+          <View style={styles.formContainer}>
+            {/* Email Input */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="Email Address"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            {/* Password Input */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="Password"
+                placeholderTextColor="rgba(0, 0, 0, 0.5)"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoCapitalize="none"
+              />
+            </View>
+
+            {/* Forgot Password */}
+            <TouchableOpacity
+              style={styles.forgotPasswordContainer}
+              onPress={() => navigation.navigate('ResetPassword')}
+            >
+              <ThemedText style={styles.forgotPasswordText}>Forgot Password ?</ThemedText>
+            </TouchableOpacity>
+
+            {/* Login Button */}
+            <TouchableOpacity 
+              style={[styles.loginButton, (loginMutation.isPending || !email.trim() || !password.trim()) && styles.loginButtonDisabled]}
+              onPress={handleLogin}
+              disabled={loginMutation.isPending || !email.trim() || !password.trim()}
+            >
+              {loginMutation.isPending ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <ThemedText style={styles.loginButtonText}>Login</ThemedText>
+              )}
+            </TouchableOpacity>
           </View>
 
-          {/* Password Input */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              placeholderTextColor="rgba(0, 0, 0, 0.5)"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              autoCapitalize="none"
-            />
+          {/* Legal Text */}
+          <View style={styles.legalContainer}>
+            <ThemedText style={styles.legalText}>
+              By proceeding you agree with Bill's Pro{' '}
+              <ThemedText 
+                style={styles.legalLink}
+                onPress={() => Linking.openURL('https://example.com/terms')}
+              >
+                terms of use
+              </ThemedText>
+              {' '}and{' '}
+              <ThemedText 
+                style={styles.legalLink}
+                onPress={() => Linking.openURL('https://example.com/privacy')}
+              >
+                privacy policy
+              </ThemedText>
+            </ThemedText>
           </View>
-
-          {/* Forgot Password */}
-          <TouchableOpacity
-            style={styles.forgotPasswordContainer}
-            onPress={() => navigation.navigate('ResetPassword')}
-          >
-            <ThemedText style={styles.forgotPasswordText}>Forgot Password ?</ThemedText>
-          </TouchableOpacity>
-
-          {/* Login Button */}
-          <TouchableOpacity 
-            style={styles.loginButton}
-            onPress={() => navigation.navigate('Main')}
-          >
-            <ThemedText style={styles.loginButtonText}>Login</ThemedText>
-          </TouchableOpacity>
-        </View>
-
-        {/* Legal Text */}
-        <View style={styles.legalContainer}>
-          <ThemedText style={styles.legalText}>
-            By proceeding you agree with Bill's Pro{' '}
-            <ThemedText 
-              style={styles.legalLink}
-              onPress={() => Linking.openURL('https://example.com/terms')}
-            >
-              terms of use
-            </ThemedText>
-            {' '}and{' '}
-            <ThemedText 
-              style={styles.legalLink}
-              onPress={() => Linking.openURL('https://example.com/privacy')}
-            >
-              privacy policy
-            </ThemedText>
-          </ThemedText>
-        </View>
+        </ScrollView>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -142,12 +303,15 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: height * 0.485, // ~452px
+    maxHeight: height * 0.485, // ~452px
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
-    paddingTop: 30,
     paddingHorizontal: 20,
+  },
+  cardContent: {
+    paddingTop: 30,
+    paddingBottom: 20,
   },
   registerButton: {
     position: 'absolute',
@@ -159,6 +323,8 @@ const styles = StyleSheet.create({
     borderRadius: 100,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 1000,
+    elevation: 5,
   },
   registerButtonText: {
     fontSize: 14,
@@ -224,12 +390,13 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     color: '#FFFFFF',
   },
+  loginButtonDisabled: {
+    opacity: 0.6,
+  },
   legalContainer: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
+    marginTop: 20,
     alignItems: 'center',
+    paddingBottom: 20,
   },
   legalText: {
     fontSize: 10,
@@ -239,6 +406,23 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   legalLink: {
+    color: '#42ac36',
+  },
+  biometricButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EFEFEF',
+    height: 60,
+    width: width - 40,
+    borderRadius: 15,
+    marginTop: 12,
+    gap: 12,
+  },
+  biometricButtonText: {
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 19,
     color: '#42ac36',
   },
 });

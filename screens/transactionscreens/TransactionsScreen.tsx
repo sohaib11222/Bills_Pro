@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   Dimensions,
   Image,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -14,6 +16,13 @@ import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../components/ThemedText';
+import {
+  useTransactionStats,
+  useDepositTransactions,
+  useWithdrawalTransactions,
+  useBillPaymentTransactions,
+  useAllTransactions,
+} from '../../queries/transactionQueries';
 
 const { width } = Dimensions.get('window');
 
@@ -31,6 +40,7 @@ const TransactionsScreen = () => {
   const [selectedTransactionType, setSelectedTransactionType] = useState<TransactionType>('Deposit');
   const [showTransactionTypeDropdown, setShowTransactionTypeDropdown] = useState(false);
   const [showAllTransactionsDropdown, setShowAllTransactionsDropdown] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   // Button refs and positions for dropdowns
   const timeframeButtonRef = useRef<View>(null);
@@ -44,46 +54,296 @@ const TransactionsScreen = () => {
   const timeframes: TimeframeType[] = ['7 Days', '30 Days', '90 Days'];
   const transactionTypes: TransactionType[] = ['Deposit', 'Withdrawal', 'Bill Payments'];
 
-  const recentTransactions = [
-    {
-      id: '1',
-      type: 'Funds Deposit',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-    },
-    {
-      id: '2',
-      type: 'Funds Withdrawal',
-      status: 'Successful',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: false,
-    },
-    {
-      id: '3',
-      type: 'Airtime Recharge',
-      status: 'Pending',
-      amount: '20,000',
-      date: '06 Oct, 25 - 08:00 PM',
-      isDeposit: true,
-      isPending: true,
-    },
-  ];
+  // Map timeframe to period for stats
+  const getPeriodFromTimeframe = (timeframe: TimeframeType): 'day' | 'week' | 'month' => {
+    if (timeframe === '7 Days') return 'week';
+    if (timeframe === '30 Days') return 'month';
+    return 'month'; // Default for 90 Days
+  };
 
-  // Bar chart data for 7 days - matching the design
-  const chartData = [
-    { day: 'Mon', value: 2000, isHighlighted: false },
-    { day: 'Tue', value: 1200, isHighlighted: false },
-    { day: 'Wed', value: 500, isHighlighted: true }, // Has tooltip
-    { day: 'Thu', value: 1500, isHighlighted: false },
-    { day: 'Fri', value: 1200, isHighlighted: false },
-    { day: 'Sat', value: 2200, isHighlighted: true }, // Darker green
-    { day: 'Sun', value: 800, isHighlighted: false },
-  ];
+  // API calls
+  const period = getPeriodFromTimeframe(selectedTimeframe);
+  const { data: statsData, isLoading: isLoadingStats, refetch: refetchStats } = useTransactionStats(period);
 
-  const maxValue = Math.max(...chartData.map((d) => d.value));
+  // Calculate date range based on timeframe
+  const getDateRange = (timeframe: TimeframeType) => {
+    const today = new Date();
+    const formatDate = (date: Date) => date.toISOString().split('T')[0];
+    
+    if (timeframe === '7 Days') {
+      const weekStart = new Date(today);
+      weekStart.setDate(today.getDate() - 7);
+      return {
+        start_date: formatDate(weekStart),
+        end_date: formatDate(today),
+      };
+    } else if (timeframe === '30 Days') {
+      const monthStart = new Date(today);
+      monthStart.setDate(today.getDate() - 30);
+      return {
+        start_date: formatDate(monthStart),
+        end_date: formatDate(today),
+      };
+    } else if (timeframe === '90 Days') {
+      const days90Start = new Date(today);
+      days90Start.setDate(today.getDate() - 90);
+      return {
+        start_date: formatDate(days90Start),
+        end_date: formatDate(today),
+      };
+    }
+    return {};
+  };
+
+  const dateRange = useMemo(() => getDateRange(selectedTimeframe), [selectedTimeframe]);
+
+  // Get transactions based on currency and type with filters
+  // Note: These endpoints don't support date filters directly, so we'll filter client-side if needed
+  const { data: depositData, isLoading: isLoadingDeposits, refetch: refetchDeposits } = useDepositTransactions();
+  const { data: withdrawalData, isLoading: isLoadingWithdrawals, refetch: refetchWithdrawals } = useWithdrawalTransactions();
+  const { data: billPaymentData, isLoading: isLoadingBillPayments, refetch: refetchBillPayments } = useBillPaymentTransactions();
+  
+  // For crypto and virtual card with date range
+  const cryptoFilters = useMemo(() => ({
+    wallet_type: 'crypto' as const,
+    limit: 50,
+    ...dateRange,
+  }), [dateRange]);
+  
+  const virtualCardFilters = useMemo(() => ({
+    wallet_type: 'virtual_card' as const,
+    limit: 50,
+    ...dateRange,
+  }), [dateRange]);
+
+  const { data: cryptoData, isLoading: isLoadingCrypto, refetch: refetchCrypto } = useAllTransactions(
+    selectedCurrency === 'crypto' ? cryptoFilters : undefined
+  );
+  
+  const { data: virtualCardData, isLoading: isLoadingVirtualCard, refetch: refetchVirtualCard } = useAllTransactions(
+    selectedCurrency === 'virtualCard' ? virtualCardFilters : undefined
+  );
+
+  // Get all transactions for chart data (for the selected timeframe)
+  const chartTransactionsFilters = useMemo(() => ({
+    wallet_type: selectedCurrency === 'naira' ? 'naira' as const : 
+                 selectedCurrency === 'crypto' ? 'crypto' as const : 
+                 selectedCurrency === 'virtualCard' ? 'virtual_card' as const : undefined,
+    type: selectedTransactionType === 'Deposit' ? 'deposit' :
+          selectedTransactionType === 'Withdrawal' ? 'withdrawal' :
+          selectedTransactionType === 'Bill Payments' ? 'bill_payment' : undefined,
+    limit: 100,
+    ...dateRange,
+  }), [selectedCurrency, selectedTransactionType, dateRange]);
+
+  const { data: chartTransactionsData, refetch: refetchChartTransactions } = useAllTransactions(chartTransactionsFilters);
+
+  // Helper functions
+  const formatDate = (dateString: string): string => {
+    try {
+      const date = new Date(dateString);
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = date.toLocaleString('en-US', { month: 'short' });
+      const year = date.getFullYear().toString().slice(-2);
+      const hours = date.getHours();
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const displayHours = hours % 12 || 12;
+      return `${day} ${month}, ${year} - ${displayHours}:${minutes} ${ampm}`;
+    } catch {
+      return dateString;
+    }
+  };
+
+  const formatCurrency = (amount: number, currency: string): string => {
+    if (currency === 'NGN') {
+      return `₦${amount.toLocaleString('en-NG', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    } else if (currency === 'USD') {
+      return `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    return `${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
+  };
+
+  const mapStatus = (status: string): string => {
+    const statusMap: Record<string, string> = {
+      'completed': 'Successful',
+      'pending': 'Pending',
+      'failed': 'Failed',
+      'cancelled': 'Cancelled',
+    };
+    return statusMap[status] || status;
+  };
+
+  const getTransactionTypeLabel = (type: string, category?: string): string => {
+    if (type === 'deposit') return 'Funds Deposit';
+    if (type === 'withdrawal') return 'Funds Withdrawal';
+    if (type === 'bill_payment') {
+      if (category === 'airtime') return 'Airtime Recharge';
+      if (category === 'data') return 'Data Recharge';
+      return 'Bill Payment';
+    }
+    return type;
+  };
+
+  // Format transaction for UI
+  const formatTransaction = (tx: any): any => {
+    const isDeposit = tx.type === 'deposit' || tx.type === 'crypto_buy' || tx.type === 'card_funding';
+    const isPending = tx.status === 'pending';
+    
+    return {
+      id: tx.transaction_id || tx.id,
+      transaction_id: tx.transaction_id,
+      type: getTransactionTypeLabel(tx.type, tx.category),
+      status: mapStatus(tx.status),
+      amount: formatCurrency(tx.amount, tx.currency),
+      date: formatDate(tx.created_at),
+      isDeposit,
+      isPending,
+      originalData: {
+        ...tx,
+        wallet_type: tx.wallet_type, // Preserve wallet_type
+      },
+    };
+  };
+
+  // Get recent transactions based on selected currency and type
+  const recentTransactions = useMemo(() => {
+    let transactions: any[] = [];
+    
+    if (selectedCurrency === 'naira') {
+      if (selectedTransactionType === 'Deposit') {
+        transactions = depositData?.data || [];
+      } else if (selectedTransactionType === 'Withdrawal') {
+        transactions = withdrawalData?.data || [];
+      } else if (selectedTransactionType === 'Bill Payments') {
+        transactions = billPaymentData?.data || [];
+      }
+    } else if (selectedCurrency === 'crypto') {
+      transactions = cryptoData?.data || [];
+    } else if (selectedCurrency === 'virtualCard') {
+      transactions = virtualCardData?.data || [];
+    }
+
+    // Filter by date range if needed
+    if (dateRange.start_date && dateRange.end_date) {
+      transactions = transactions.filter((tx: any) => {
+        if (!tx.created_at) return false;
+        const txDate = new Date(tx.created_at).toISOString().split('T')[0];
+        return txDate >= dateRange.start_date! && txDate <= dateRange.end_date!;
+      });
+    }
+
+    return transactions.slice(0, 3).map(formatTransaction);
+  }, [
+    selectedCurrency,
+    selectedTransactionType,
+    depositData,
+    withdrawalData,
+    billPaymentData,
+    cryptoData,
+    virtualCardData,
+    dateRange,
+  ]);
+
+  // Generate chart data from actual transactions grouped by day of week
+  const chartData = useMemo(() => {
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    
+    // Get transactions for chart based on selected filters
+    let transactions: any[] = [];
+    
+    if (selectedCurrency === 'naira') {
+      if (selectedTransactionType === 'Deposit') {
+        transactions = depositData?.data || [];
+      } else if (selectedTransactionType === 'Withdrawal') {
+        transactions = withdrawalData?.data || [];
+      } else if (selectedTransactionType === 'Bill Payments') {
+        transactions = billPaymentData?.data || [];
+      }
+    } else {
+      transactions = chartTransactionsData?.data || [];
+    }
+
+    // Filter by date range if needed (client-side filtering for endpoints that don't support it)
+    if (dateRange.start_date && dateRange.end_date) {
+      transactions = transactions.filter((tx: any) => {
+        if (!tx.created_at) return false;
+        const txDate = new Date(tx.created_at).toISOString().split('T')[0];
+        return txDate >= dateRange.start_date! && txDate <= dateRange.end_date!;
+      });
+    }
+
+    // Group transactions by day of week
+    const dayTotals: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+    
+    transactions.forEach((tx: any) => {
+      try {
+        const date = new Date(tx.created_at);
+        const dayOfWeek = date.getDay(); // 0 = Sunday, 1 = Monday, etc.
+        // Convert to Monday = 0 format
+        const mondayBasedDay = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+        dayTotals[mondayBasedDay] += Number(tx.amount) || 0;
+      } catch (e) {
+        // Skip invalid dates
+      }
+    });
+
+    // Find max value for scaling
+    const maxValue = Math.max(...Object.values(dayTotals), 1);
+    
+    // Find days with highest values for highlighting
+    const sortedDays = Object.entries(dayTotals)
+      .map(([day, value]) => ({ day: parseInt(day), value }))
+      .sort((a, b) => b.value - a.value);
+    
+    const topTwoDays = sortedDays.slice(0, 2).map(d => d.day);
+
+    return days.map((day, index) => {
+      const value = dayTotals[index] || 0;
+      const isHighlighted = topTwoDays.includes(index) && value > 0;
+      
+      return {
+        day,
+        value: Math.floor(value),
+        isHighlighted,
+      };
+    });
+  }, [selectedCurrency, selectedTransactionType, depositData, withdrawalData, billPaymentData, chartTransactionsData, dateRange]);
+
+  const maxValue = Math.max(...chartData.map((d) => d.value), 1);
+
+  // Handle pull to refresh
+  const onRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      // Refetch all relevant queries based on current selections
+      await Promise.all([
+        refetchStats(),
+        refetchDeposits(),
+        refetchWithdrawals(),
+        refetchBillPayments(),
+        refetchCrypto(),
+        refetchVirtualCard(),
+        refetchChartTransactions(),
+      ]);
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // Loading state
+  const isLoading = isLoadingStats || isLoadingDeposits || isLoadingWithdrawals || 
+                    isLoadingBillPayments || isLoadingCrypto || isLoadingVirtualCard;
+
+  // Get total deposits for display
+  const totalDeposits = useMemo(() => {
+    if (statsData?.data?.total_deposits) {
+      return formatCurrency(statsData.data.total_deposits, 'NGN');
+    }
+    return 'N0';
+  }, [statsData]);
 
   return (
     <View style={styles.container}>
@@ -92,6 +352,14 @@ const TransactionsScreen = () => {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            tintColor="#1B800F"
+            colors={['#1B800F']}
+          />
+        }
       >
         {/* Header */}
         <View style={styles.header}>
@@ -105,7 +373,11 @@ const TransactionsScreen = () => {
               styles.currencyOption,
               selectedCurrency === 'naira' && styles.currencyOptionActive,
             ]}
-            onPress={() => setSelectedCurrency('naira')}
+            onPress={() => {
+              setSelectedCurrency('naira');
+              // Reset transaction type when currency changes
+              setSelectedTransactionType('Deposit');
+            }}
             activeOpacity={0.8}
           >
             <ThemedText
@@ -122,7 +394,11 @@ const TransactionsScreen = () => {
               styles.currencyOption,
               selectedCurrency === 'crypto' && styles.currencyOptionActive,
             ]}
-            onPress={() => setSelectedCurrency('crypto')}
+            onPress={() => {
+              setSelectedCurrency('crypto');
+              // Reset transaction type when currency changes
+              setSelectedTransactionType('Deposit');
+            }}
             activeOpacity={0.8}
           >
             <ThemedText
@@ -139,7 +415,11 @@ const TransactionsScreen = () => {
               styles.currencyOption,
               selectedCurrency === 'virtualCard' && styles.currencyOptionActive,
             ]}
-            onPress={() => setSelectedCurrency('virtualCard')}
+            onPress={() => {
+              setSelectedCurrency('virtualCard');
+              // Reset transaction type when currency changes
+              setSelectedTransactionType('Deposit');
+            }}
             activeOpacity={0.8}
           >
             <ThemedText
@@ -163,7 +443,9 @@ const TransactionsScreen = () => {
           <View style={styles.depositsCardHeader}>
             <View style={styles.depositsCardLeft}>
               <ThemedText style={styles.depositsLabel}>Total Deposits</ThemedText>
-              <ThemedText style={styles.depositsAmount}>N200,000</ThemedText>
+              <ThemedText style={styles.depositsAmount}>
+                {isLoadingStats ? '...' : totalDeposits}
+              </ThemedText>
             </View>
             <View style={styles.depositsCardRight}>
               <TouchableOpacity
@@ -205,9 +487,15 @@ const TransactionsScreen = () => {
           <View style={styles.chartArea}>
             <View style={styles.chartContainer}>
               <View style={styles.chartYAxis}>
-                <ThemedText style={styles.chartYLabel}>2000</ThemedText>
-                <ThemedText style={styles.chartYLabel}>1000</ThemedText>
-                <ThemedText style={styles.chartYLabel}>500</ThemedText>
+                <ThemedText style={styles.chartYLabel}>
+                  {maxValue > 0 ? Math.ceil(maxValue).toLocaleString() : '2000'}
+                </ThemedText>
+                <ThemedText style={styles.chartYLabel}>
+                  {maxValue > 0 ? Math.ceil(maxValue * 0.5).toLocaleString() : '1000'}
+                </ThemedText>
+                <ThemedText style={styles.chartYLabel}>
+                  {maxValue > 0 ? Math.ceil(maxValue * 0.25).toLocaleString() : '500'}
+                </ThemedText>
                 <ThemedText style={styles.chartYLabel}>0</ThemedText>
               </View>
               <View style={styles.chartBarsContainer}>
@@ -222,10 +510,16 @@ const TransactionsScreen = () => {
                       },
                     ]}
                   />
-                  {item.isHighlighted && item.day === 'Wed' && (
+                  {item.isHighlighted && item.value > 0 && (
                     <View style={styles.chartTooltipContainer}>
                       <View style={styles.chartTooltip}>
-                        <ThemedText style={styles.chartTooltipText}>N5,000</ThemedText>
+                        <ThemedText style={styles.chartTooltipText}>
+                          {selectedCurrency === 'naira' 
+                            ? `₦${item.value.toLocaleString('en-NG', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                            : selectedCurrency === 'crypto'
+                            ? `$${item.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                            : `$${item.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                        </ThemedText>
                       </View>
                       <View style={styles.chartTooltipArrow} />
                     </View>
@@ -269,24 +563,48 @@ const TransactionsScreen = () => {
             }}
             activeOpacity={0.8}
           >
-            <ThemedText style={styles.allTransactionsButtonText}>All Transactions</ThemedText>
-            <Ionicons name="chevron-down" size={12} color="#6B7280" />
+            <ThemedText style={styles.allTransactionsButtonText} numberOfLines={1}>All Transactions</ThemedText>
+            <Ionicons name="chevron-down" size={10} color="#6B7280" />
           </TouchableOpacity>
 
           {/* Transaction List */}
           <View style={styles.transactionList}>
-            {recentTransactions.map((transaction) => (
-              <TouchableOpacity
-                key={transaction.id}
-                style={styles.transactionItem}
-                onPress={() => {
-                  navigation.navigate('TransactionHistory', {
-                    type: transaction.isDeposit ? 'deposit' : 'withdraw',
-                    transactionData: transaction,
-                  });
-                }}
-                activeOpacity={0.8}
-              >
+            {isLoading && recentTransactions.length === 0 ? (
+              <View style={{ padding: 20, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color="#1B800F" />
+              </View>
+            ) : recentTransactions.length === 0 ? (
+              <View style={{ padding: 20, alignItems: 'center' }}>
+                <ThemedText style={{ color: '#6B7280', fontSize: 12 }}>
+                  No recent transactions
+                </ThemedText>
+              </View>
+            ) : (
+              recentTransactions.map((transaction) => (
+                <TouchableOpacity
+                  key={transaction.id}
+                  style={styles.transactionItem}
+                  onPress={() => {
+                    // Determine transaction type based on currency
+                    let txType: string = transaction.isDeposit ? 'deposit' : 'withdraw';
+                    if (selectedCurrency === 'crypto') {
+                      txType = 'crypto';
+                    } else if (selectedCurrency === 'virtualCard') {
+                      txType = 'virtual_card';
+                    }
+                    
+                    navigation.navigate('TransactionHistory', {
+                      type: txType as any,
+                      transactionData: {
+                        ...(transaction.originalData || transaction),
+                        transaction_id: transaction.transaction_id,
+                        wallet_type: selectedCurrency === 'crypto' ? 'crypto' : 
+                                     selectedCurrency === 'virtualCard' ? 'virtual_card' : undefined,
+                      },
+                    });
+                  }}
+                  activeOpacity={0.8}
+                >
                 <View
                   style={[
                     styles.transactionIcon,
@@ -335,7 +653,8 @@ const TransactionsScreen = () => {
                   <ThemedText style={styles.transactionDate}>{transaction.date}</ThemedText>
                 </View>
               </TouchableOpacity>
-            ))}
+              ))
+            )}
           </View>
         </View>
       </ScrollView>
@@ -366,6 +685,7 @@ const TransactionsScreen = () => {
                 onPress={() => {
                   setSelectedTimeframe(timeframe);
                   setShowTimeframeDropdown(false);
+                  // Data will automatically refetch when timeframe changes due to query key change
                 }}
                 activeOpacity={0.8}
               >
@@ -402,6 +722,11 @@ const TransactionsScreen = () => {
                 onPress={() => {
                   setSelectedTransactionType(type);
                   setShowTransactionTypeDropdown(false);
+                  // Refetch data when transaction type changes
+                  refetchDeposits();
+                  refetchWithdrawals();
+                  refetchBillPayments();
+                  refetchChartTransactions();
                 }}
                 activeOpacity={0.8}
               >
@@ -581,7 +906,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   depositsAmount: {
-    fontSize: 30,
+    fontSize: 20,
     fontWeight: '700',
     color: '#111827',
     marginBottom: 25,
@@ -685,7 +1010,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#1B800F',
   },
   chartTooltipText: {
-    fontSize: 14,
+    fontSize: 8,
     fontWeight: '400',
     color: '#FFFFFF',
   },
@@ -730,16 +1055,17 @@ const styles = StyleSheet.create({
     borderRadius: 100,
     borderWidth: 0.3,
     borderColor: '#0000004D',
-    width: '26%',
-    paddingHorizontal: 12,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
     paddingVertical: 8,
     marginBottom: 16,
-    gap: 8,
+    gap: 4,
   },
   allTransactionsButtonText: {
     fontSize: 8,
     fontWeight: '400',
     color: '#111827',
+    flexShrink: 1,
   },
   transactionList: {
     gap: 12,

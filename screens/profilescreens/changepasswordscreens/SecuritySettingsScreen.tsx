@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -9,13 +9,16 @@ import {
     StatusBar as RNStatusBar,
     Image,
     Switch,
+    Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useNavigation } from '@react-navigation/native';
 import type { RootStackParamList } from '../../../RootNavigator';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ThemedText from '../../../components/ThemedText';
+import { getBiometricEnabled, setBiometricEnabled } from '../../../services/storage/appStorage';
 
 const { width } = Dimensions.get('window');
 
@@ -23,7 +26,90 @@ type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const SecuritySettingsScreen = () => {
     const navigation = useNavigation<RootNavigationProp>();
-    const [biometricEnabled, setBiometricEnabled] = useState(true);
+    const [biometricEnabled, setBiometricEnabledState] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
+
+    // Load biometric preference on mount
+    useEffect(() => {
+        const loadBiometricPreference = async () => {
+            try {
+                const enabled = await getBiometricEnabled();
+                setBiometricEnabledState(enabled);
+            } catch (error) {
+                console.error('Error loading biometric preference:', error);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        loadBiometricPreference();
+    }, []);
+
+    // Handle biometric toggle
+    const handleBiometricToggle = async (value: boolean) => {
+        if (value) {
+            // User wants to enable biometric
+            try {
+                // Check if biometric hardware is available
+                const compatible = await LocalAuthentication.hasHardwareAsync();
+                if (!compatible) {
+                    Alert.alert(
+                        'Biometric Not Available',
+                        'Biometric authentication is not available on this device.'
+                    );
+                    return;
+                }
+
+                // Check if biometrics are enrolled
+                const enrolled = await LocalAuthentication.isEnrolledAsync();
+                if (!enrolled) {
+                    Alert.alert(
+                        'Biometric Not Set Up',
+                        'Please set up biometric authentication (fingerprint or face ID) in your device settings first.'
+                    );
+                    return;
+                }
+
+                // Test biometric authentication
+                const result = await LocalAuthentication.authenticateAsync({
+                    promptMessage: 'Enable biometric login',
+                    cancelLabel: 'Cancel',
+                    disableDeviceFallback: false,
+                });
+
+                if (result.success) {
+                    // Save preference
+                    await setBiometricEnabled(true);
+                    setBiometricEnabledState(true);
+                    Alert.alert('Success', 'Biometric login has been enabled.');
+                } else {
+                    if (result.error !== 'user_cancel') {
+                        Alert.alert('Authentication Failed', 'Biometric authentication failed. Please try again.');
+                    }
+                }
+            } catch (error: any) {
+                console.error('Biometric authentication error:', error);
+                Alert.alert('Error', 'An error occurred while enabling biometric login. Please try again.');
+            }
+        } else {
+            // User wants to disable biometric
+            Alert.alert(
+                'Disable Biometric Login',
+                'Are you sure you want to disable biometric login?',
+                [
+                    { text: 'Cancel', style: 'cancel', onPress: () => {} },
+                    {
+                        text: 'Disable',
+                        style: 'destructive',
+                        onPress: async () => {
+                            await setBiometricEnabled(false);
+                            setBiometricEnabledState(false);
+                            Alert.alert('Success', 'Biometric login has been disabled.');
+                        },
+                    },
+                ]
+            );
+        }
+    };
 
     return (
         <View style={styles.container}>
@@ -124,9 +210,10 @@ const SecuritySettingsScreen = () => {
                             <ThemedText style={styles.optionText}>Biometric login</ThemedText>
                             <Switch
                                 value={biometricEnabled}
-                                onValueChange={setBiometricEnabled}
+                                onValueChange={handleBiometricToggle}
                                 trackColor={{ false: '#D1D5DB', true: '#1B800F' }}
                                 thumbColor="#FFFFFF"
+                                disabled={isLoading}
                             />
                         </View>
                     </View>
