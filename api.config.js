@@ -3,7 +3,7 @@
  * Base URL and all API routes
  */
 
-export const API_BASE_URL = 'https://billspro.hmstech.xyz/api';
+export const API_BASE_URL = 'https://billspro.hmstech.org/api';
 
 // Authentication Routes
 export const AUTH_ROUTES = {

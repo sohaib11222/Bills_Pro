@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -83,7 +83,27 @@ const HomeScreen = () => {
   const user = dashboardData?.data?.user;
   const fiatBalance = dashboardData?.data?.balances?.fiat?.balance || 0;
   const cryptoBalance = dashboardData?.data?.balances?.crypto?.total_usd || 0;
-  const cryptoBreakdown = dashboardData?.data?.balances?.crypto?.breakdown || [];
+  const rawCryptoBreakdown = dashboardData?.data?.balances?.crypto?.breakdown || [];
+  
+  // Deduplicate crypto breakdown by currency - keep only one entry per currency
+  const cryptoBreakdown = useMemo(() => {
+    return rawCryptoBreakdown.reduce((acc: any[], crypto: any) => {
+      const existingIndex = acc.findIndex((c: any) => c.currency === crypto.currency);
+      if (existingIndex === -1) {
+        // First occurrence of this currency, add it
+        acc.push(crypto);
+      } else {
+        // Currency already exists, keep the one with higher balance
+        const existing = acc[existingIndex];
+        const existingBalance = parseFloat(existing.balance || 0);
+        const newBalance = parseFloat(crypto.balance || 0);
+        if (newBalance > existingBalance) {
+          acc[existingIndex] = crypto;
+        }
+      }
+      return acc;
+    }, []);
+  }, [rawCryptoBreakdown]);
 
   // Format balance for display
   const formatBalance = (amount: number, currency: 'NGN' | 'USD') => {

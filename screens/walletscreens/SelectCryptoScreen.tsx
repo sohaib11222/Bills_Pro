@@ -65,13 +65,14 @@ const SelectCryptoScreen = () => {
     // Fetch crypto accounts from API
     const { data: accountsData, isLoading, error, refetch } = useCryptoAccounts();
 
-    // Transform API data to crypto assets format
+    // Transform API data to crypto assets format and deduplicate by currency
     const cryptoAssets = useMemo(() => {
         if (!accountsData?.data || !Array.isArray(accountsData.data)) {
             return [];
         }
 
-        return accountsData.data.map((account: any, index: number) => {
+        // First, map all accounts
+        const allAccounts = accountsData.data.map((account: any, index: number) => {
             const balance = account.balance || 0;
             const usdValue = account.usd_value || 0;
             
@@ -82,8 +83,11 @@ const SelectCryptoScreen = () => {
                 id: uniqueId,
                 name: account.name || getCryptoName(account.currency),
                 symbol: account.symbol || account.currency,
+                currency: account.currency, // Add currency for deduplication
                 amount: balance.toString(),
+                balance: balance, // Keep numeric balance for comparison
                 usdValue: `$${usdValue.toFixed(2)}`,
+                usdValueNum: usdValue, // Keep numeric USD value for comparison
                 icon: getCryptoIcon(account.currency),
                 iconBackground: getCryptoBackground(account.currency),
                 blockchains: account.blockchains || [], // For USDT grouped accounts
@@ -91,6 +95,37 @@ const SelectCryptoScreen = () => {
                 blockchain: account.blockchains?.[0]?.blockchain, // Default blockchain for USDT
             };
         });
+
+        // Deduplicate by currency - keep only one entry per currency
+        // For grouped accounts (like USDT), keep them as is
+        // For regular accounts, keep the one with highest balance
+        const uniqueAccounts = allAccounts.reduce((acc: any[], account: any) => {
+            // If it's a grouped account, always include it
+            if (account.isGrouped) {
+                acc.push(account);
+                return acc;
+            }
+
+            // For non-grouped accounts, check if currency already exists
+            const existingIndex = acc.findIndex((a: any) => 
+                a.currency === account.currency && !a.isGrouped
+            );
+
+            if (existingIndex === -1) {
+                // First occurrence of this currency, add it
+                acc.push(account);
+            } else {
+                // Currency already exists, keep the one with higher balance
+                const existing = acc[existingIndex];
+                if (account.balance > existing.balance || account.usdValueNum > existing.usdValueNum) {
+                    acc[existingIndex] = account;
+                }
+            }
+
+            return acc;
+        }, []);
+
+        return uniqueAccounts;
     }, [accountsData]);
 
     const filteredAssets = useMemo(() => {

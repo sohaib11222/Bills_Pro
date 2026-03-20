@@ -340,8 +340,27 @@ const WalletsScreen = () => {
 
                         {/* Crypto Assets Grid */}
                         <View style={styles.cryptoAssetsGrid}>
-                            {cryptoWallets.length > 0 ? (
-                                cryptoWallets
+                            {cryptoWallets.length > 0 ? (() => {
+                                // Deduplicate by currency - keep only one entry per currency
+                                const uniqueWallets = cryptoWallets.reduce((acc: any[], wallet: any) => {
+                                    const existingIndex = acc.findIndex((w: any) => w.currency === wallet.currency);
+                                    if (existingIndex === -1) {
+                                        // First occurrence of this currency, add it
+                                        acc.push(wallet);
+                                    } else {
+                                        // Currency already exists, combine balances if needed
+                                        const existing = acc[existingIndex];
+                                        const existingBalance = parseFloat(existing.available_balance || 0);
+                                        const newBalance = parseFloat(wallet.available_balance || 0);
+                                        // Keep the one with higher balance, or combine them
+                                        if (newBalance > existingBalance) {
+                                            acc[existingIndex] = wallet;
+                                        }
+                                    }
+                                    return acc;
+                                }, []);
+
+                                return uniqueWallets
                                     .filter((wallet: any) => parseFloat(wallet.available_balance || 0) > 0)
                                     .map((wallet: any) => {
                                         const balance = parseFloat(wallet.available_balance || 0);
@@ -350,7 +369,7 @@ const WalletsScreen = () => {
 
                                         return (
                                             <TouchableOpacity
-                                                key={wallet.id}
+                                                key={wallet.id || `${wallet.currency}_${wallet.blockchain || 'default'}`}
                                                 style={styles.cryptoAssetCard}
                                                 activeOpacity={0.8}
                                                 onPress={() => {
@@ -391,8 +410,8 @@ const WalletsScreen = () => {
                                                 </View>
                                             </TouchableOpacity>
                                         );
-                                    })
-                            ) : (
+                                    });
+                            })() : (
                                 <View style={styles.emptyContainer}>
                                     <ThemedText style={styles.emptyText}>No crypto wallets found</ThemedText>
                                 </View>

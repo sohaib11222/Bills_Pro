@@ -21,10 +21,24 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.hmstech11.billspro"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/c0db46ef-11c0-4dd6-bd7a-f6d2e0cd41bf",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c0db46ef-11c0-4dd6-bd7a-f6d2e0cd41bf"
+      }
+    },
+    "owner": "hmstech11"
   }
 }
