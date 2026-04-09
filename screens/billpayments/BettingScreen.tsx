@@ -26,6 +26,14 @@ import ThemedText from '../../components/ThemedText';
 import { useBillPaymentProviders, useBillPaymentBeneficiaries } from '../../queries/billPaymentQueries';
 import { useValidateAccount, useInitiateBillPayment, useConfirmBillPayment, useCreateBeneficiary, useDeleteBeneficiary } from '../../mutations/billPaymentMutations';
 import { useFiatWallets } from '../../queries/walletQueries';
+import { useVirtualCards } from '../../queries/virtualCardQueries';
+import BillPaymentSourceSelector from '../../components/billpayment/BillPaymentSourceSelector';
+import {
+  DEFAULT_BILL_PAYMENT_SOURCE,
+  billPaymentWalletPayload,
+  validateBillPaymentSource,
+  type BillPaymentSourceValue,
+} from '../../types/billPayment';
 
 const { width, height } = Dimensions.get('window');
 
@@ -60,11 +68,13 @@ const BettingScreen = () => {
     const [showManageBeneficiariesModal, setShowManageBeneficiariesModal] = useState(false);
     const [beneficiaryName, setBeneficiaryName] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
+    const [paymentSource, setPaymentSource] = useState<BillPaymentSourceValue>(DEFAULT_BILL_PAYMENT_SOURCE);
 
     // API Hooks
     const { data: providersData, isLoading: providersLoading, refetch: refetchProviders } = useBillPaymentProviders(CATEGORY_CODE, 'NG');
     const { data: beneficiariesData, isLoading: beneficiariesLoading, refetch: refetchBeneficiaries } = useBillPaymentBeneficiaries();
     const { data: walletsData, isLoading: walletsLoading, refetch: refetchWallets } = useFiatWallets();
+    const { data: cardsData } = useVirtualCards();
     const validateAccountMutation = useValidateAccount();
     const initiateMutation = useInitiateBillPayment();
     const confirmMutation = useConfirmBillPayment();
@@ -117,6 +127,12 @@ const BettingScreen = () => {
             return;
         }
 
+        const sourceErr = validateBillPaymentSource(paymentSource, (cardsData?.data || []).length);
+        if (sourceErr) {
+            Alert.alert('Payment source', sourceErr);
+            return;
+        }
+
         setIsProcessing(true);
         setIsValidating(true);
         try {
@@ -142,6 +158,7 @@ const BettingScreen = () => {
                 currency: 'NGN',
                 amount: numericAmount,
                 accountNumber: userId,
+                ...billPaymentWalletPayload(paymentSource),
             });
 
             if (initiateResult.success && initiateResult.data) {
@@ -448,6 +465,8 @@ const BettingScreen = () => {
                         )}
                     </View>
                 </ImageBackground>
+
+                <BillPaymentSourceSelector value={paymentSource} onChange={setPaymentSource} />
 
                 {/* Recent Section */}
                 <View style={styles.recentSection}>

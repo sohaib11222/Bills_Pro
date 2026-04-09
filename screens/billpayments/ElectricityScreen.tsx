@@ -25,6 +25,14 @@ import ThemedText from '../../components/ThemedText';
 import { useBillPaymentProviders, useBillPaymentBeneficiaries } from '../../queries/billPaymentQueries';
 import { useValidateMeter, useInitiateBillPayment, useConfirmBillPayment, useCreateBeneficiary, useDeleteBeneficiary } from '../../mutations/billPaymentMutations';
 import { useFiatWallets } from '../../queries/walletQueries';
+import { useVirtualCards } from '../../queries/virtualCardQueries';
+import BillPaymentSourceSelector from '../../components/billpayment/BillPaymentSourceSelector';
+import {
+  DEFAULT_BILL_PAYMENT_SOURCE,
+  billPaymentWalletPayload,
+  validateBillPaymentSource,
+  type BillPaymentSourceValue,
+} from '../../types/billPayment';
 
 const { width, height } = Dimensions.get('window');
 
@@ -60,11 +68,13 @@ const ElectricityScreen = () => {
     const [showSaveBeneficiaryModal, setShowSaveBeneficiaryModal] = useState(false);
     const [showManageBeneficiariesModal, setShowManageBeneficiariesModal] = useState(false);
     const [beneficiaryName, setBeneficiaryName] = useState('');
+    const [paymentSource, setPaymentSource] = useState<BillPaymentSourceValue>(DEFAULT_BILL_PAYMENT_SOURCE);
 
     // API Hooks
     const { data: providersData, isLoading: providersLoading } = useBillPaymentProviders(CATEGORY_CODE, 'NG');
     const { data: beneficiariesData, isLoading: beneficiariesLoading } = useBillPaymentBeneficiaries();
     const { data: walletsData, isLoading: walletsLoading } = useFiatWallets();
+    const { data: cardsData } = useVirtualCards();
     const validateMeterMutation = useValidateMeter();
     const initiateMutation = useInitiateBillPayment();
     const confirmMutation = useConfirmBillPayment();
@@ -99,6 +109,12 @@ const ElectricityScreen = () => {
             return;
         }
 
+        const sourceErr = validateBillPaymentSource(paymentSource, (cardsData?.data || []).length);
+        if (sourceErr) {
+            Alert.alert('Payment source', sourceErr);
+            return;
+        }
+
         setIsProcessing(true);
         try {
             // Validate meter first
@@ -125,6 +141,7 @@ const ElectricityScreen = () => {
                 amount: numericAmount,
                 accountNumber: meterNumber,
                 accountType: selectedAccountType,
+                ...billPaymentWalletPayload(paymentSource),
             });
 
             if (initiateResult.success && initiateResult.data) {
@@ -424,6 +441,8 @@ const ElectricityScreen = () => {
                         )}
                     </View>
                 </ImageBackground>
+
+                <BillPaymentSourceSelector value={paymentSource} onChange={setPaymentSource} />
 
                 {/* Recent Section */}
                 <View style={styles.recentSection}>

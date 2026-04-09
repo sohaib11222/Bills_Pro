@@ -1,17 +1,26 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/api/apiClient';
 import { BILL_PAYMENT_ROUTES } from '../api.config';
+import type { BillPaymentWalletType } from '../types/billPayment';
+
+type BillPaymentWalletFields = {
+  payment_wallet_type?: BillPaymentWalletType;
+  payment_wallet_currency?: string;
+  virtual_card_id?: number;
+};
 
 // Preview bill payment
 export const usePreviewBillPayment = () => {
   return useMutation({
-    mutationFn: async (data: {
-      categoryCode: string;
-      providerId: number;
-      amount?: number;
-      currency?: string;
-      planId?: number;
-    }) => {
+    mutationFn: async (
+      data: {
+        categoryCode: string;
+        providerId: number;
+        amount?: number;
+        currency?: string;
+        planId?: number;
+      } & BillPaymentWalletFields
+    ) => {
       const response = await apiClient.post(BILL_PAYMENT_ROUTES.preview, data);
       return response.data;
     },
@@ -50,16 +59,18 @@ export const useInitiateBillPayment = () => {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: async (data: {
-      categoryCode: string;
-      providerId: number;
-      currency: string;
-      amount?: number;
-      accountNumber?: string;
-      planId?: number;
-      accountType?: string;
-      beneficiaryId?: number;
-    }) => {
+    mutationFn: async (
+      data: {
+        categoryCode: string;
+        providerId: number;
+        currency: string;
+        amount?: number;
+        accountNumber?: string;
+        planId?: number;
+        accountType?: string;
+        beneficiaryId?: number;
+      } & BillPaymentWalletFields
+    ) => {
       const response = await apiClient.post(BILL_PAYMENT_ROUTES.initiate, data);
       return response.data;
     },
@@ -86,6 +97,7 @@ export const useConfirmBillPayment = () => {
       queryClient.invalidateQueries({ queryKey: ['wallet'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['virtual-cards'] });
     },
   });
 };

@@ -26,6 +26,14 @@ import { useBillPaymentProviders, useBillPaymentPlans } from '../../queries/bill
 import { useBillPaymentBeneficiaries } from '../../queries/billPaymentQueries';
 import { useInitiateBillPayment, useConfirmBillPayment, useCreateBeneficiary, useDeleteBeneficiary } from '../../mutations/billPaymentMutations';
 import { useFiatWallets } from '../../queries/walletQueries';
+import { useVirtualCards } from '../../queries/virtualCardQueries';
+import BillPaymentSourceSelector from '../../components/billpayment/BillPaymentSourceSelector';
+import {
+  DEFAULT_BILL_PAYMENT_SOURCE,
+  billPaymentWalletPayload,
+  validateBillPaymentSource,
+  type BillPaymentSourceValue,
+} from '../../types/billPayment';
 
 const { width, height } = Dimensions.get('window');
 
@@ -63,12 +71,14 @@ const InternetSubscriptionScreen = () => {
     const [showSaveBeneficiaryModal, setShowSaveBeneficiaryModal] = useState(false);
     const [showManageBeneficiariesModal, setShowManageBeneficiariesModal] = useState(false);
     const [beneficiaryName, setBeneficiaryName] = useState('');
+    const [paymentSource, setPaymentSource] = useState<BillPaymentSourceValue>(DEFAULT_BILL_PAYMENT_SOURCE);
 
     // API Hooks
     const { data: providersData, isLoading: providersLoading } = useBillPaymentProviders(CATEGORY_CODE, 'NG');
     const { data: plansData, isLoading: plansLoading } = useBillPaymentPlans(selectedProviderId || 0);
     const { data: beneficiariesData, isLoading: beneficiariesLoading } = useBillPaymentBeneficiaries();
     const { data: walletsData, isLoading: walletsLoading } = useFiatWallets();
+    const { data: cardsData } = useVirtualCards();
     const initiateMutation = useInitiateBillPayment();
     const confirmMutation = useConfirmBillPayment();
     const createBeneficiaryMutation = useCreateBeneficiary();
@@ -105,6 +115,12 @@ const InternetSubscriptionScreen = () => {
             return;
         }
 
+        const sourceErr = validateBillPaymentSource(paymentSource, (cardsData?.data || []).length);
+        if (sourceErr) {
+            Alert.alert('Payment source', sourceErr);
+            return;
+        }
+
         setIsProcessing(true);
         try {
             const result = await initiateMutation.mutateAsync({
@@ -113,6 +129,7 @@ const InternetSubscriptionScreen = () => {
                 planId: selectedPlan.id,
                 accountNumber: routerNumber,
                 currency: 'NGN',
+                ...billPaymentWalletPayload(paymentSource),
             });
 
             if (result.success && result.data) {
@@ -408,6 +425,8 @@ const InternetSubscriptionScreen = () => {
                         )}
                     </View>
                 </ImageBackground>
+
+                <BillPaymentSourceSelector value={paymentSource} onChange={setPaymentSource} />
 
                 {/* Recent Section */}
                 <View style={styles.recentSection}>
